@@ -3,8 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 from datetime import date, datetime
-from enum import StrEnum
+
+if sys.version_info >= (3, 11):
+    from enum import StrEnum
+else:
+    from enum import Enum
+
+    class StrEnum(str, Enum):
+        pass
+
 
 from pydantic import BaseModel, Field, computed_field
 

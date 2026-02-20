@@ -66,7 +66,10 @@ class TestLoadSaveConfig:
 class TestProviderCRUD:
     def test_add_provider(self, tmp_config_dir: Path):
         pc = add_provider(
-            "my-claude", ProviderType.ANTHROPIC, "test-key-anthropic-123", tmp_config_dir
+            "my-claude",
+            ProviderType.ANTHROPIC,
+            "test-key-anthropic-123",
+            tmp_config_dir,
         )
         assert pc.name == "my-claude"
         assert pc.provider_type == ProviderType.ANTHROPIC
