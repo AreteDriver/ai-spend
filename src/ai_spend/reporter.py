@@ -128,6 +128,59 @@ def format_sync_table(syncs: list[SyncResult], console: Console | None = None) -
     return capture.get()
 
 
+def format_stats_table(
+    commands: dict[str, int],
+    pro_gates: dict[str, int],
+    total: int,
+    first_event: str | None,
+    last_event: str | None,
+    daily_activity: list[tuple[str, int]],
+    console: Console | None = None,
+) -> str:
+    """Render telemetry stats as Rich tables."""
+    c = console or Console(file=io.StringIO(), force_terminal=False)
+
+    # Overview
+    overview = Table(title="Telemetry Overview")
+    overview.add_column("Metric", style="cyan")
+    overview.add_column("Value", style="green")
+    overview.add_row("Total Events", str(total))
+    overview.add_row("First Event", first_event or "n/a")
+    overview.add_row("Last Event", last_event or "n/a")
+
+    with c.capture() as capture:
+        c.print(overview)
+
+        # Command usage
+        if commands:
+            cmd_table = Table(title="Command Usage")
+            cmd_table.add_column("Command", style="cyan")
+            cmd_table.add_column("Count", style="green", justify="right")
+            for name, count in commands.items():
+                cmd_table.add_row(name, str(count))
+            c.print(cmd_table)
+
+        # Pro gate hits
+        if pro_gates:
+            gate_table = Table(title="Pro Feature Gate Hits")
+            gate_table.add_column("Feature", style="cyan")
+            gate_table.add_column("Attempts", style="yellow", justify="right")
+            for name, count in pro_gates.items():
+                gate_table.add_row(name, str(count))
+            c.print(gate_table)
+
+        # Daily activity
+        if daily_activity:
+            act_table = Table(title="Daily Activity (Last 7 Days)")
+            act_table.add_column("Date", style="cyan")
+            act_table.add_column("Events", style="green", justify="right")
+            for day, count in daily_activity:
+                act_table.add_row(day, str(count))
+            c.print(act_table)
+
+    return capture.get()
+
+
 def export_records(
     records: list[UsageRecord],
     fmt: ExportFormat,

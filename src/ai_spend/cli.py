@@ -29,10 +29,12 @@ from ai_spend.reporter import (
     format_daily_json,
     format_daily_table,
     format_providers_table,
+    format_stats_table,
     format_summary_json,
     format_summary_table,
     format_sync_table,
 )
+from ai_spend.telemetry import track_command
 
 app = typer.Typer(name="ai-spend", help="Aggregate AI API costs across providers.")
 config_app = typer.Typer(name="config", help="Manage provider configurations.")
@@ -78,6 +80,7 @@ def config_add(
     api_key: Annotated[str, typer.Option("--key", "-k", help="API key")] = "",
 ) -> None:
     """Add a provider configuration."""
+    track_command("config.add")
     try:
         license_info = get_license()
         if not license_info.is_pro:
@@ -107,6 +110,7 @@ def config_remove(
     name: Annotated[str, typer.Argument(help="Provider name to remove")],
 ) -> None:
     """Remove a provider configuration."""
+    track_command("config.remove")
     try:
         cfg.remove_provider(name)
         store = cfg.get_store()
@@ -123,6 +127,7 @@ def config_remove(
 @config_app.command("list")
 def config_list() -> None:
     """List all configured providers."""
+    track_command("config.list")
     providers = cfg.list_providers()
     if not providers:
         console.print(
@@ -138,6 +143,7 @@ def config_list() -> None:
 @app.command()
 def sync() -> None:
     """Sync usage data from all configured providers."""
+    track_command("sync")
     providers = cfg.list_providers()
     if not providers:
         console.print("[dim]No providers configured.[/dim]")
@@ -190,6 +196,7 @@ def summary(
     ] = 30,
 ) -> None:
     """Show spend summary."""
+    track_command("summary")
     store = cfg.get_store()
     end = date.today()
     start = end - timedelta(days=days)
@@ -209,6 +216,7 @@ def daily(
     json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ) -> None:
     """Show daily spend breakdown."""
+    track_command("daily")
     store = cfg.get_store()
     end = date.today()
     start = end - timedelta(days=last)
@@ -234,6 +242,7 @@ def budget_set(
     ] = "month",
 ) -> None:
     """Set a spending budget."""
+    track_command("budget.set")
     try:
         store = cfg.get_store()
         b = set_budget(store, total, period)
@@ -246,6 +255,7 @@ def budget_set(
 @budget_app.command("check")
 def budget_check() -> None:
     """Check current spend against budget."""
+    track_command("budget.check")
     try:
         store = cfg.get_store()
         status = check_budget(store)
@@ -271,6 +281,7 @@ def export(
     ] = None,
 ) -> None:
     """Export usage records (Pro feature)."""
+    track_command("export")
     try:
         _do_export(fmt, days, output)
     except LicenseError as e:
@@ -310,6 +321,7 @@ def manual_add(
     ] = "manual",
 ) -> None:
     """Add a manual cost entry."""
+    track_command("manual.add")
     try:
         d = date.fromisoformat(entry_date) if entry_date else date.today()
     except ValueError:
@@ -333,6 +345,7 @@ def manual_add(
 @app.command()
 def status() -> None:
     """Show system status and sync history."""
+    track_command("status")
     store = cfg.get_store()
     providers = cfg.list_providers()
     license_info = get_license()
@@ -352,3 +365,54 @@ def status() -> None:
     if syncs:
         console.print()
         console.print(format_sync_table(syncs[:5]))
+
+
+# --- Stats ---
+
+
+@app.command()
+def stats(
+    json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+) -> None:
+    """Show local usage telemetry (requires AI_SPEND_TELEMETRY=1)."""
+    from ai_spend.telemetry import TelemetryStore, is_enabled
+
+    if not is_enabled():
+        console.print(
+            "[dim]Telemetry is disabled. "
+            "Set AI_SPEND_TELEMETRY=1 to enable local usage tracking.[/dim]"
+        )
+        return
+
+    db_path = cfg.get_config_dir() / "telemetry.db"
+    if not db_path.exists():
+        console.print("[dim]No telemetry data yet.[/dim]")
+        return
+
+    ts = TelemetryStore(db_path)
+    try:
+        commands = ts.get_command_counts()
+        pro_gates = ts.get_pro_gate_counts()
+        total = ts.get_total_events()
+        first = ts.get_first_event_time()
+        last = ts.get_last_event_time()
+        activity = ts.get_daily_activity()
+
+        if json_output:
+            import json
+
+            data = {
+                "total_events": total,
+                "first_event": first,
+                "last_event": last,
+                "commands": commands,
+                "pro_gate_hits": pro_gates,
+                "daily_activity": [{"date": d, "count": c} for d, c in activity],
+            }
+            console.print(json.dumps(data, indent=2))
+        else:
+            console.print(
+                format_stats_table(commands, pro_gates, total, first, last, activity)
+            )
+    finally:
+        ts.close()
