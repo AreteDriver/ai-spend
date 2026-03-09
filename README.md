@@ -114,13 +114,21 @@ No background processes. No network calls except during `sync`. Run it in a cron
 
 ## Free vs Pro
 
-| Feature | Free | Pro |
+| Feature | Free | Pro ($8/mo) |
 |---------|:---:|:---:|
 | Sync + summary + daily | Yes | Yes |
 | Budget tracking | Yes | Yes |
 | Manual entries | Yes | Yes |
 | JSON output | Yes | Yes |
+| Unlimited providers | 3 max | Yes |
 | CSV/JSON export | -- | Yes |
+
+**Get Pro:** [Monthly ($8/mo)](https://buy.stripe.com/28E4gzbphbp9cJC4g7grS04) | [Yearly ($69/yr)](https://buy.stripe.com/7sYcN564Xctd10U5kbgrS05)
+
+**Activate:**
+```bash
+export AI_SPEND_LICENSE=ASPD-XXXX-XXXX-XXXX
+```
 
 ## License
 
