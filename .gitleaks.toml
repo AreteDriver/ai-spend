@@ -1,6 +1,9 @@
 [allowlist]
 description = "ai-spend gitleaks allowlist"
 regexTarget = "match"
+regexes = [
+    '''ai-spend-v1''',
+]
 paths = [
     '''tests/''',
 ]

@@ -7,7 +7,6 @@ import time
 
 from ai_spend.licensing import (
     Tier,
-    _compute_checksum,
     _get_machine_id,
     _read_cache,
     _validate_server,
@@ -222,7 +221,10 @@ class TestGetLicenseWithServer:
         monkeypatch.setattr("ai_spend.licensing._CACHE_FILE", cache_file)
         monkeypatch.setenv("AI_SPEND_LICENSE", key)
 
-        expired = {"key": key, "tier": "pro", "valid": True, "cached_at": time.time() - 200000}
+        expired = {
+            "key": key, "tier": "pro", "valid": True,
+            "cached_at": time.time() - 200000,
+        }
         cache_file.write_text(json.dumps(expired))
 
         monkeypatch.setattr("ai_spend.licensing._validate_server", lambda k: None)
