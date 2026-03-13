@@ -125,6 +125,8 @@ No background processes. No network calls except during `sync`. Run it in a cron
 
 **Get Pro:** [Monthly ($8/mo)](https://buy.stripe.com/28E4gzbphbp9cJC4g7grS04) | [Yearly ($69/yr)](https://buy.stripe.com/7sYcN564Xctd10U5kbgrS05)
 
+**All 5 Tools Bundle:** [Monthly ($29/mo)](https://buy.stripe.com/7sY9AT9h90Kv5ha27ZgrS0a) | [Yearly ($199/yr)](https://buy.stripe.com/9B6fZh9h98cX24YfYPgrS0b) — includes claudemd-forge, agent-lint, ai-spend, promptctl, context-hygiene
+
 **Activate:**
 ```bash
 export AI_SPEND_LICENSE=ASPD-XXXX-XXXX-XXXX
