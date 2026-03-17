@@ -7,15 +7,6 @@ from pathlib import Path
 
 import pytest
 
-
-@pytest.fixture(autouse=True)
-def _no_server_validation(monkeypatch, tmp_path):
-    """Prevent license server calls and cache reads in all tests."""
-    monkeypatch.setattr("ai_spend.licensing._validate_server", lambda k: None)
-    monkeypatch.setattr("ai_spend.licensing._CACHE_FILE", tmp_path / "no_cache.json")
-    monkeypatch.setattr("ai_spend.licensing._CACHE_DIR", tmp_path)
-
-
 from ai_spend.models import (
     BucketWidth,
     BudgetConfig,
@@ -25,6 +16,15 @@ from ai_spend.models import (
     SyncStatus,
     UsageRecord,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_server_validation(monkeypatch, tmp_path):
+    """Prevent license server calls and cache reads in all tests."""
+    monkeypatch.setattr("ai_spend.licensing._validate_server", lambda k: None)
+    monkeypatch.setattr("ai_spend.licensing._CACHE_FILE", tmp_path / "no_cache.json")
+    monkeypatch.setattr("ai_spend.licensing._CACHE_DIR", tmp_path)
+
 
 
 @pytest.fixture

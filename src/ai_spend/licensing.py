@@ -81,7 +81,8 @@ def _get_machine_id() -> str:
     """Generate a stable machine identifier (hostname + username hash)."""
     import platform
 
-    raw = f"{platform.node()}:{os.environ.get('USER', os.environ.get('USERNAME', 'unknown'))}"
+    user = os.environ.get("USER", os.environ.get("USERNAME", "unknown"))
+    raw = f"{platform.node()}:{user}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
