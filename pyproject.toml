@@ -7,7 +7,7 @@ name = "ai-spend"
 version = "0.2.0"
 description = "Aggregate AI API costs across providers into a single CLI dashboard"
 readme = "README.md"
-license = "MIT"
+license = "BSL-1.1"
 requires-python = ">=3.10"
 authors = [{ name = "AreteDriver" }]
 classifiers = [
