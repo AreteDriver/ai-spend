@@ -132,6 +132,10 @@ No background processes. No network calls except during `sync`. Run it in a cron
 export AI_SPEND_LICENSE=ASPD-XXXX-XXXX-XXXX
 ```
 
+## Community
+
+[Discord](https://discord.gg/fdzQkrt8) — Join the community
+
 ## License
 
 MIT
