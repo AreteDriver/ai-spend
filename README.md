@@ -5,9 +5,9 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
-**Your AI bills, in your terminal. No proxies. No dashboards. No SDK changes.**
+**`htop` for AI spend.** Local-first, cross-provider, terminal-native. No proxies. No dashboards. No SDK changes.
 
-`ai-spend` pulls usage data directly from Anthropic and OpenAI's official billing APIs and displays it in your terminal. Your API keys stay on your machine. Your prompts are never seen.
+`ai-spend` aggregates usage data from **Anthropic and OpenAI** (with OpenRouter coming soon) directly into your terminal. Your API keys stay local. Your prompts are never seen. Your data never leaves your machine.
 
 ```
 $ ai-spend summary
@@ -32,16 +32,21 @@ $ ai-spend daily --last 7
   ...
 ```
 
+## Why ai-spend?
+
+If you use **multiple AI providers** — Anthropic for coding, OpenAI for embeddings, maybe OpenRouter for routing or a local Ollama instance for cheap tasks — each has its own billing dashboard. None of them show the others.
+
+`ai-spend` is the **unified view** — one terminal command to see everything you've spent, everywhere, without routing your traffic through a third-party proxy or changing your code.
+
 ## How It's Different
 
-Unlike gateway-based trackers, `ai-spend` never sees your prompts. It reads token counts and costs from your provider's billing API — the same data that appears on your invoice. Nothing more.
-
-| | Reads billing API directly | No proxy/SDK | Prompts stay local | CLI-native |
-|---|:---:|:---:|:---:|:---:|
-| **ai-spend** | Yes | Yes | Yes | Yes |
-| Langfuse | No (intercepts calls) | No | No | No |
-| Helicone | No (proxy) | No | No | No |
-| OpenAI dashboard | Yes | Yes | Yes | No (web only) |
+| | Cross-provider | Reads billing API directly | No proxy/SDK | Prompts stay local | CLI-native |
+|---|:---:|:---:|:---:|:---:|:---:|
+| **ai-spend** | Yes | Yes | Yes | Yes | Yes |
+| LangSmith | Yes | No (intercepts calls) | No | No | No |
+| OpenLLMetry | Yes | No (proxy) | No | No | No |
+| Helicone | Yes | No (proxy) | No | No | No |
+| OpenAI dashboard | No | Yes | Yes | Yes | No (web only) |
 
 ## Install
 
@@ -55,6 +60,7 @@ pip install ai-spend
 # Add your providers (keys stored locally with 0600 perms)
 ai-spend config add anthropic
 ai-spend config add openai
+# ai-spend config add openrouter  # Coming soon
 
 # Pull latest usage data
 ai-spend sync

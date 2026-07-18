@@ -23,6 +23,7 @@ class ProviderType(StrEnum):
 
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
+    OPENROUTER = "openrouter"
     MANUAL = "manual"
 
 
