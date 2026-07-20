@@ -425,3 +425,62 @@ class TestUtilities:
         assert store.list_providers() == []
         assert store.get_record_count() == 0
         assert store.get_budget() is None
+
+
+class TestGetTotalSpendWeek:
+    def test_week_branch(self, tmp_db_path: Path):
+        s = SpendStore(tmp_db_path)
+        s.add_provider("a", ProviderType.ANTHROPIC)
+        s.add_usage_records(
+            [
+                UsageRecord(
+                    provider_id="a",
+                    provider_type=ProviderType.ANTHROPIC,
+                    date=date.today(),
+                    model="claude",
+                    cost_usd=Decimal("5.0"),
+                ),
+            ]
+        )
+        total = s.get_total_spend_current_period(BucketWidth.WEEK)
+        assert total == Decimal("5")
+        s.close()
+
+
+class TestMigrationEdgeCases:
+    def test_migration_with_missing_dir(self, tmp_path: Path, monkeypatch):
+        """Cover store.py line 31: missing migrations dir returns []."""
+        from ai_spend import store as store_mod
+
+        monkeypatch.setattr(store_mod, "_MIGRATIONS_DIR", tmp_path / "nope")
+        db = tmp_path / "spend.db"
+        s = SpendStore(db)
+        s.close()
+        assert db.exists()
+
+    def test_migration_rollback_on_bad_sql(self, tmp_path: Path, monkeypatch):
+        """Cover store.py lines 74-76: ROLLBACK on invalid SQL."""
+        from ai_spend import store as store_mod
+
+        bad_migration = tmp_path / "999_bad.sql"
+        bad_migration.write_text("INVALID SYNTAX HERE;;;")
+        monkeypatch.setattr(store_mod, "_MIGRATIONS_DIR", tmp_path)
+        db = tmp_path / "spend.db"
+        # Pre-create a valid db with schema_version so it tries to run migration
+        conn = __import__("sqlite3").connect(str(db))
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_version "
+            "(version INTEGER PRIMARY KEY, applied_at TEXT)"
+        )
+        conn.execute("INSERT INTO schema_version VALUES (0, 'now')")
+        conn.commit()
+        conn.close()
+        with pytest.raises(StoreError, match="Migration 999"):
+            SpendStore(db)
+
+    def test_db_init_failure(self, tmp_path: Path):
+        """Cover store.py lines 91-92: garbage bytes cause StoreError."""
+        db = tmp_path / "spend.db"
+        db.write_bytes(b"NOT A SQLITE FILE")
+        with pytest.raises(StoreError, match="Failed to initialize"):
+            SpendStore(db)

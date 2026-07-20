@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import signal
+import stat
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -677,6 +678,124 @@ def prune(
     else:
         console.print(
             f"[green]Deleted {count} records older than {cutoff}[/green]"
+        )
+
+
+# --- Health ---
+
+
+@app.command()
+def health(ctx: typer.Context) -> None:
+    """Run operational health checks."""
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "health")
+    store = app_ctx.store
+    config_dir = app_ctx.config_dir
+    all_ok = True
+
+    # Database integrity
+    try:
+        row = store._conn.execute("PRAGMA integrity_check").fetchone()
+        if row and row[0] == "ok":
+            console.print(
+                "[green]✓ Database integrity check passed[/green]"
+            )
+        else:
+            detail = row[0] if row else "unknown"
+            console.print(
+                f"[red]✗ Database integrity failed: {detail}[/red]"
+            )
+            all_ok = False
+    except Exception as e:
+        console.print(f"[red]✗ Database integrity check error: {e}[/red]")
+        all_ok = False
+
+    # WAL mode
+    try:
+        wal_row = store._conn.execute("PRAGMA journal_mode").fetchone()
+        if wal_row and wal_row[0].lower() == "wal":
+            console.print("[green]✓ WAL mode enabled[/green]")
+        else:
+            detail = wal_row[0] if wal_row else "unknown"
+            console.print(f"[yellow]! WAL mode: {detail}[/yellow]")
+    except Exception as e:
+        console.print(f"[yellow]! WAL mode check error: {e}[/yellow]")
+
+    # Config directory permissions
+    try:
+        st = config_dir.stat()
+        mode = st.st_mode
+        ok = (
+            mode & stat.S_IRWXU
+            and not (mode & stat.S_IRWXG)
+            and not (mode & stat.S_IRWXO)
+        )
+        if ok:
+            console.print(
+                "[green]✓ Config directory permissions OK[/green]"
+            )
+        else:
+            console.print(
+                f"[yellow]! Config dir permissions: "
+                f"{oct(mode)[-3:]} (expected 700)[/yellow]"
+            )
+            all_ok = False
+    except Exception as e:
+        console.print(f"[red]✗ Config directory check error: {e}[/red]")
+        all_ok = False
+
+    # Config file permissions
+    config_path = config_dir / "config.yaml"
+    if config_path.exists():
+        try:
+            st = config_path.stat()
+            mode = st.st_mode
+            ok = (
+                (mode & stat.S_IRUSR)
+                and (mode & stat.S_IWUSR)
+                and not (mode & stat.S_IRGRP)
+                and not (mode & stat.S_IROTH)
+            )
+            if ok:
+                console.print(
+                    "[green]✓ Config file permissions OK[/green]"
+                )
+            else:
+                console.print(
+                    f"[yellow]! Config file permissions: "
+                    f"{oct(mode)[-3:]} (expected 600)[/yellow]"
+                )
+                all_ok = False
+        except Exception as e:
+            console.print(f"[red]✗ Config file check error: {e}[/red]")
+            all_ok = False
+    else:
+        console.print("[dim]- Config file not present (OK)[/dim]")
+
+    # Encryption status
+    key_file = config_dir / ".key"
+    if key_file.exists():
+        console.print("[green]✓ Config encryption key present[/green]")
+    else:
+        console.print(
+            "[yellow]! Config encryption key not present "
+            "(run `config encrypt`)[/yellow]"
+        )
+
+    # Schema version
+    try:
+        from ai_spend.store import _get_current_version
+
+        version = _get_current_version(store._conn)
+        console.print(f"[green]✓ Schema version: {version}[/green]")
+    except Exception as e:
+        console.print(f"[yellow]! Schema version check error: {e}[/yellow]")
+
+    if all_ok:
+        console.print("\n[bold green]All checks passed[/bold green]")
+    else:
+        console.print(
+            "\n[bold yellow]Some checks raised warnings[/bold yellow]"
         )
 
 

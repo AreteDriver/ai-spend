@@ -177,4 +177,4 @@ export AI_SPEND_LICENSE=ASPD-XXXX-XXXX-XXXX
 
 ## License
 
-MIT
+[BSL-1.1](https://mariadb.com/bsl11/) (Business Source License 1.1)

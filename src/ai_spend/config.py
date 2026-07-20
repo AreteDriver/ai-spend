@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import copy
 import os
+import re
+import shutil
 import stat
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +19,29 @@ from ai_spend.models import ProviderConfig, ProviderType
 
 _DEFAULT_DIR = Path.home() / ".ai-spend"
 _CONFIG_FILE = "config.yaml"
+_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def _validate_name(name: str) -> None:
+    """Reject invalid provider names."""
+    if not name or not name.strip():
+        raise ConfigError("Provider name cannot be empty")
+    if not _NAME_RE.match(name):
+        raise ConfigError(
+            "Provider name must contain only letters, numbers, underscores, and hyphens"
+        )
+
+
+def _backup_config(config_dir: Path) -> Path | None:
+    """Create a timestamped backup of config.yaml before destructive edits."""
+    path = config_dir / _CONFIG_FILE
+    if not path.exists():
+        return None
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup = config_dir / f"config.yaml.backup.{ts}"
+    shutil.copy2(path, backup)
+    backup.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    return backup
 
 
 def get_config_dir() -> Path:
@@ -95,6 +121,7 @@ def add_provider(
     config_dir: Path | None = None,
 ) -> ProviderConfig:
     """Add a provider to the YAML config."""
+    _validate_name(name)
     data = _load_config(config_dir)
     providers = data.get("providers", [])
     for p in providers:
@@ -140,7 +167,10 @@ def edit_provider(
     config_dir: Path | None = None,
 ) -> ProviderConfig:
     """Edit an existing provider's fields."""
-    data = _load_config(config_dir)
+    d = config_dir or get_config_dir()
+    _validate_name(name)
+    _backup_config(d)
+    data = _load_config(d)
     providers = data.get("providers", [])
     for p in providers:
         if p.get("name") == name:
@@ -148,7 +178,7 @@ def edit_provider(
                 p["api_key"] = api_key
             if provider_type is not None:
                 p["provider_type"] = provider_type.value
-            _save_config(data, config_dir)
+            _save_config(data, d)
             return ProviderConfig(
                 name=name,
                 provider_type=ProviderType(p["provider_type"]),

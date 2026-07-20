@@ -704,3 +704,29 @@ class TestGracefulShutdown:
             shutdown._handler(2, None)
             assert shutdown.signaled
         assert store.closed
+
+
+class TestHealth:
+    def test_health_all_pass(self):
+        runner.invoke(app, ["config", "add", "x", "manual"])
+        result = runner.invoke(app, ["health"])
+        assert result.exit_code == 0
+        assert "Database integrity" in result.stdout
+        assert "All checks passed" in result.stdout
+
+    def test_health_no_config_file(self):
+        result = runner.invoke(app, ["health"])
+        assert result.exit_code == 0
+        assert "Config file not present" in result.stdout
+
+    def test_health_encryption_warning(self):
+        runner.invoke(app, ["config", "add", "x", "manual"])
+        # Remove key file if it exists to trigger warning
+        import os
+
+        key_file = Path(os.environ["AI_SPEND_DIR"]) / ".key"
+        if key_file.exists():
+            key_file.unlink()
+        result = runner.invoke(app, ["health"])
+        assert result.exit_code == 0
+        assert "encryption key not present" in result.stdout

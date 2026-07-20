@@ -183,3 +183,41 @@ class TestEncryptionAtRest:
         assert not (mode & stat.S_IRGRP)
         assert not (mode & stat.S_IROTH)
 
+
+class TestNameValidation:
+    def test_empty_name_raises(self, tmp_config_dir: Path):
+        with pytest.raises(ConfigError, match="empty"):
+            add_provider("", ProviderType.OPENAI, "k", tmp_config_dir)
+
+    def test_whitespace_name_raises(self, tmp_config_dir: Path):
+        with pytest.raises(ConfigError, match="empty"):
+            add_provider("   ", ProviderType.OPENAI, "k", tmp_config_dir)
+
+    def test_invalid_chars_raises(self, tmp_config_dir: Path):
+        with pytest.raises(ConfigError, match="letters"):
+            add_provider("bad name!", ProviderType.OPENAI, "k", tmp_config_dir)
+
+    def test_valid_names_accepted(self, tmp_config_dir: Path):
+        add_provider("my-provider_123", ProviderType.OPENAI, "k", tmp_config_dir)
+        providers = list_providers(tmp_config_dir)
+        assert providers[0].name == "my-provider_123"
+
+
+class TestConfigBackup:
+    def test_edit_creates_backup(self, tmp_config_dir: Path):
+        add_provider("x", ProviderType.OPENAI, "old", tmp_config_dir)
+        from ai_spend.config import edit_provider
+
+        edit_provider("x", api_key="new", config_dir=tmp_config_dir)
+        backups = list(tmp_config_dir.glob("config.yaml.backup.*"))
+        assert len(backups) == 1
+
+    def test_edit_backup_is_readable(self, tmp_config_dir: Path):
+        add_provider("x", ProviderType.OPENAI, "old", tmp_config_dir)
+        from ai_spend.config import edit_provider
+
+        edit_provider("x", api_key="new", config_dir=tmp_config_dir)
+        backups = list(tmp_config_dir.glob("config.yaml.backup.*"))
+        data = backups[0].read_text()
+        assert "x" in data
+
