@@ -8,8 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `ai-spend health`: operational health checks — DB integrity, WAL mode, config permissions, encryption status, schema version.
+- `ai-spend config encrypt`: encrypt all API keys at rest using Fernet (AES-128-CBC + HMAC).
+- `ai-spend summary --provider <name>` and `ai-spend daily --provider <name>`: filter by provider.
+- `ai-spend prune --older-than N [--dry-run]`: record retention with dry-run preview.
 - `ai-spend sync --since YYYY-MM-DD` / `-s`: custom start date for sync window.
 - SQLite backup before migrations: `spend.db` copied to timestamped backup before any schema migration runs.
+- Config backup before edits: `config.yaml` copied to timestamped backup before `edit_provider` writes.
+- Provider name validation: reject empty, whitespace-only, or invalid character names.
+- Graceful SIGINT handling during `sync`: close store connection cleanly on interrupt.
+- Shell completion support documented (`--install-completion`, `--show-completion`).
+- PyPI publish workflow (`.github/workflows/publish.yml`) with OIDC trusted publishing.
+
+### Changed
+- README license badge and footer corrected to BSL-1.1.
+- Development status bumped from Alpha to Beta in package classifiers.
 
 ## [0.3.0] - 2026-07-19
 
