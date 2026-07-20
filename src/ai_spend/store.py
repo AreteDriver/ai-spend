@@ -222,9 +222,10 @@ class SpendStore:
         self,
         start: date,
         end: date,
+        provider_id: str | None = None,
     ) -> list[DailySpend]:
-        """Get daily spend totals in a date range."""
-        records = self.get_usage_by_date_range(start, end)
+        """Get daily spend totals in a date range, optionally filtered by provider."""
+        records = self.get_usage_by_date_range(start, end, provider_id=provider_id)
         days: dict[str, DailySpend] = {}
         for r in records:
             d = r.date.isoformat()
@@ -244,9 +245,10 @@ class SpendStore:
         self,
         start: date,
         end: date,
+        provider_id: str | None = None,
     ) -> SpendSummary:
-        """Get aggregated spend summary for a date range."""
-        records = self.get_usage_by_date_range(start, end)
+        """Get aggregated spend summary, optionally filtered by provider."""
+        records = self.get_usage_by_date_range(start, end, provider_id=provider_id)
         summary = SpendSummary(start_date=start, end_date=end)
         for r in records:
             summary.total_usd += r.cost_usd
@@ -338,6 +340,25 @@ class SpendStore:
         ]
 
     # --- Utilities ---
+
+    def prune_records(self, cutoff: date, dry_run: bool = False) -> int:
+        """Delete usage records older than cutoff. Returns count deleted."""
+        if dry_run:
+            row = self._conn.execute(
+                "SELECT COUNT(*) as cnt FROM usage_records WHERE date < ?",
+                (cutoff.isoformat(),),
+            ).fetchone()
+            return int(row["cnt"])
+        cur = self._conn.execute(
+            "DELETE FROM usage_records WHERE date < ?",
+            (cutoff.isoformat(),),
+        )
+        self._conn.execute(
+            "DELETE FROM sync_log WHERE synced_at < ?",
+            (datetime.combine(cutoff, datetime.min.time()).isoformat(),),
+        )
+        self._conn.commit()
+        return cur.rowcount
 
     def get_total_spend_current_period(self, period: BucketWidth) -> Decimal:
         """Get total spend for the current period (month/week/day)."""

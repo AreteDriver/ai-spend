@@ -400,6 +400,14 @@ class TestSummary:
         assert result.exit_code == 0
         assert "$5.00" in result.stdout
 
+    def test_summary_provider_filter(self):
+        runner.invoke(app, ["manual", "add", "misc", "5.00", "--provider", "p1"])
+        runner.invoke(app, ["manual", "add", "misc2", "3.00", "--provider", "p2"])
+        result = runner.invoke(app, ["summary", "--provider", "p1"])
+        assert result.exit_code == 0
+        assert "$5.00" in result.stdout
+        assert "$3.00" not in result.stdout
+
 
 class TestDaily:
     def test_empty_daily(self):
@@ -417,6 +425,14 @@ class TestDaily:
         runner.invoke(app, ["manual", "add", "misc", "3.50"])
         result = runner.invoke(app, ["daily", "--last", "7"])
         assert result.exit_code == 0
+
+    def test_daily_provider_filter(self):
+        runner.invoke(app, ["manual", "add", "misc", "4.00", "--provider", "a"])
+        runner.invoke(app, ["manual", "add", "misc2", "2.00", "--provider", "b"])
+        result = runner.invoke(app, ["daily", "--provider", "a"])
+        assert result.exit_code == 0
+        assert "$4.00" in result.stdout
+        assert "$2.00" not in result.stdout
 
 
 class TestBudgetSet:
@@ -478,6 +494,25 @@ class TestExport:
         result = runner.invoke(app, ["export", "-f", "json", "-o", str(out)])
         assert result.exit_code == 0
         assert out.exists()
+
+
+class TestPrune:
+    def test_prune_dry_run(self):
+        runner.invoke(app, ["manual", "add", "misc", "5.00"])
+        result = runner.invoke(app, ["prune", "--older-than", "1", "--dry-run"])
+        assert result.exit_code == 0
+        assert "Would delete" in result.stdout
+
+    def test_prune_actual(self):
+        runner.invoke(app, ["manual", "add", "misc", "5.00"])
+        result = runner.invoke(app, ["prune", "--older-than", "0"])
+        assert result.exit_code == 0
+        assert "Deleted" in result.stdout
+
+    def test_prune_no_old_records(self):
+        result = runner.invoke(app, ["prune", "--older-than", "9999"])
+        assert result.exit_code == 0
+        assert "Deleted 0" in result.stdout
 
 
 class TestImport:

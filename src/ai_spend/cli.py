@@ -372,6 +372,10 @@ def summary(
         int,
         typer.Option("--days", "-d", help="Number of days to include"),
     ] = 30,
+    provider: Annotated[
+        str | None,
+        typer.Option("--provider", help="Filter by provider name"),
+    ] = None,
 ) -> None:
     """Show spend summary."""
     app_ctx: AppContext = ctx.obj
@@ -379,7 +383,7 @@ def summary(
     store = app_ctx.store
     end = date.today()
     start = end - timedelta(days=days)
-    s = store.get_monthly_summary(start, end)
+    s = store.get_monthly_summary(start, end, provider_id=provider)
     if json_output:
         console.print(format_summary_json(s))
     else:
@@ -396,6 +400,10 @@ def daily(
     json_output: Annotated[
         bool, typer.Option("--json", help="Output as JSON")
     ] = False,
+    provider: Annotated[
+        str | None,
+        typer.Option("--provider", help="Filter by provider name"),
+    ] = None,
 ) -> None:
     """Show daily spend breakdown."""
     app_ctx: AppContext = ctx.obj
@@ -403,7 +411,7 @@ def daily(
     store = app_ctx.store
     end = date.today()
     start = end - timedelta(days=last)
-    days = store.get_daily_totals(start, end)
+    days = store.get_daily_totals(start, end, provider_id=provider)
     if json_output:
         console.print(format_daily_json(days))
     else:
@@ -584,6 +592,37 @@ def manual_add(
     record = mp.create_entry(model, cost_decimal, d, note)
     store.add_usage_records([record])
     console.print(f"[green]Added ${cost_decimal:.2f} for '{model}' on {d}[/green]")
+
+
+# --- Prune ---
+
+
+@app.command()
+def prune(
+    ctx: typer.Context,
+    older_than: Annotated[
+        int,
+        typer.Option("--older-than", help="Delete records older than N days"),
+    ],
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", "-n", help="Preview what would be deleted"),
+    ] = False,
+) -> None:
+    """Delete usage records older than a given number of days."""
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "prune")
+    store = app_ctx.store
+    cutoff = date.today() - timedelta(days=older_than)
+    count = store.prune_records(cutoff, dry_run=dry_run)
+    if dry_run:
+        console.print(
+            f"[cyan]Would delete {count} records older than {cutoff}[/cyan]"
+        )
+    else:
+        console.print(
+            f"[green]Deleted {count} records older than {cutoff}[/green]"
+        )
 
 
 # --- Status ---

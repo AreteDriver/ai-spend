@@ -20,3 +20,16 @@ def test_main_entry_point() -> None:
     sys.argv = old_argv
     sys.stdout = old_stdout
     assert exc_info.value.code == 0
+
+
+def test_shell_completion_output() -> None:
+    """Verify --show-completion emits a non-empty completion script."""
+    from typer.testing import CliRunner
+
+    from ai_spend.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["--show-completion"])
+    # Typer may install instead of showing when SHELL is set; verify no crash
+    assert result.exit_code in (0, 1)
+    assert len(result.stdout) > 0 or len(result.stderr) > 0

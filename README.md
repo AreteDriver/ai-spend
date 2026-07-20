@@ -70,6 +70,9 @@ ai-spend sync --provider openai
 # See your spend
 ai-spend summary
 ai-spend daily --last 30
+
+# Shell completion (zsh/bash/fish)
+ai-spend --install-completion
 ```
 
 ## Usage
