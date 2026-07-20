@@ -221,3 +221,17 @@ class TestConfigBackup:
         data = backups[0].read_text()
         assert "x" in data
 
+    def test_edit_backup_is_exact_copy(self, tmp_config_dir: Path):
+        add_provider("x", ProviderType.OPENAI, "old", tmp_config_dir)
+        config_path = tmp_config_dir / "config.yaml"
+        original = config_path.read_bytes()
+        from ai_spend.config import edit_provider
+
+        edit_provider("x", api_key="new", config_dir=tmp_config_dir)
+        backups = list(tmp_config_dir.glob("config.yaml.backup.*"))
+        backup = backups[0].read_bytes()
+        assert backup == original
+        # The backup is the encrypted pre-edit file; the new file is different
+        new_file = config_path.read_bytes()
+        assert backup != new_file
+

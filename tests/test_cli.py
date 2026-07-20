@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from ai_spend.cli import app
+from ai_spend.context import AppContext
 from ai_spend.licensing import generate_key
 from ai_spend.models import ProviderType
 
@@ -730,3 +732,162 @@ class TestHealth:
         result = runner.invoke(app, ["health"])
         assert result.exit_code == 0
         assert "encryption key not present" in result.stdout
+
+    def test_health_config_dir_stat_error(self, monkeypatch: pytest.MonkeyPatch):
+        runner.invoke(app, ["config", "add", "x", "manual"])
+
+        class BadStatDir:
+            """Wrapper that raises on stat()."""
+
+            def __init__(self, path: Path) -> None:
+                self._path = path
+
+            def __getattr__(self, name: str):
+                return getattr(self._path, name)
+
+            def __truediv__(self, other):
+                return self._path / other
+
+            def stat(self, *args, **kwargs):
+                raise OSError("bad stat")
+
+        original_from_env = AppContext.from_env
+        fake_dir = BadStatDir(Path(os.environ["AI_SPEND_DIR"]))
+
+        def _fake_from_env(*, verbose: bool = False):
+            ctx = original_from_env(verbose=verbose)
+            ctx.config_dir = fake_dir  # type: ignore[assignment]
+            return ctx
+
+        monkeypatch.setattr(AppContext, "from_env", _fake_from_env)
+        result = runner.invoke(app, ["health"])
+        assert result.exit_code == 0
+        assert "Config directory check error" in result.stdout
+        assert "Some checks raised warnings" in result.stdout
+
+    def test_health_integrity_not_ok(self, monkeypatch: pytest.MonkeyPatch):
+        runner.invoke(app, ["config", "add", "x", "manual"])
+        original_from_env = AppContext.from_env
+
+        class FakeCursor:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def fetchone(self):
+                return self._rows[0] if self._rows else None
+
+        class FakeConn:
+            def __init__(self, real_conn):
+                self._real = real_conn
+
+            def execute(self, sql, *args):
+                if "integrity_check" in sql.lower():
+                    class FakeRow:
+                        def __getitem__(self, _):
+                            return "corrupt"
+                    return FakeCursor([FakeRow()])
+                return self._real.execute(sql, *args)
+
+            def close(self):
+                self._real.close()
+
+        store = AppContext.from_env(verbose=False).store
+        fake_conn = FakeConn(store._conn)
+        monkeypatch.setattr(store, "_conn", fake_conn)
+
+        def _fake_from_env(*, verbose: bool = False):
+            ctx = original_from_env(verbose=verbose)
+            ctx.store = store
+            return ctx
+
+        monkeypatch.setattr(AppContext, "from_env", _fake_from_env)
+        result = runner.invoke(app, ["health"])
+        assert result.exit_code == 0
+        assert "Database integrity failed" in result.stdout
+        assert "Some checks raised warnings" in result.stdout
+
+    def test_health_config_dir_permissions_wrong(self, monkeypatch: pytest.MonkeyPatch):
+        runner.invoke(app, ["config", "add", "x", "manual"])
+        original_from_env = AppContext.from_env
+        config_dir = Path(os.environ["AI_SPEND_DIR"])
+
+        class WrongPermsDir:
+            """Wrapper that returns mode 755 from stat()."""
+
+            def __init__(self, path: Path) -> None:
+                self._path = path
+
+            def __getattr__(self, name: str):
+                return getattr(self._path, name)
+
+            def __truediv__(self, other):
+                return self._path / other
+
+            def stat(self, *args, **kwargs):
+                class FakeStat:
+                    st_mode = 0o40755
+                return FakeStat()
+
+        fake_dir = WrongPermsDir(config_dir)
+
+        def _fake_from_env(*, verbose: bool = False):
+            ctx = original_from_env(verbose=verbose)
+            ctx.config_dir = fake_dir  # type: ignore[assignment]
+            return ctx
+
+        monkeypatch.setattr(AppContext, "from_env", _fake_from_env)
+        result = runner.invoke(app, ["health"])
+        assert result.exit_code == 0
+        assert "Config dir permissions" in result.stdout
+        assert "Some checks raised warnings" in result.stdout
+
+    def test_health_config_file_permissions_wrong(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        runner.invoke(app, ["config", "add", "x", "manual"])
+        original_from_env = AppContext.from_env
+        config_dir = Path(os.environ["AI_SPEND_DIR"])
+
+        class WrongFileStat:
+            def __init__(self, path: Path) -> None:
+                self._path = path
+
+            def __getattr__(self, name: str):
+                return getattr(self._path, name)
+
+            def stat(self, *args, **kwargs):
+                class FakeStat:
+                    st_mode = 0o100644
+                return FakeStat()
+
+        class WrongFilePermsDir:
+            """Wrapper that returns mode 644 for config.yaml stat()."""
+
+            def __init__(self, path: Path) -> None:
+                self._path = path
+
+            def __getattr__(self, name: str):
+                return getattr(self._path, name)
+
+            def __truediv__(self, other):
+                result = self._path / other
+                if str(result).endswith("config.yaml"):
+                    return WrongFileStat(result)
+                return result
+
+            def stat(self, *args, **kwargs):
+                return self._path.stat(*args, **kwargs)
+
+        fake_dir = WrongFilePermsDir(config_dir)
+
+        def _fake_from_env(*, verbose: bool = False):
+            ctx = original_from_env(verbose=verbose)
+            ctx.config_dir = fake_dir  # type: ignore[assignment]
+            return ctx
+
+        monkeypatch.setattr(AppContext, "from_env", _fake_from_env)
+        result = runner.invoke(app, ["health"])
+        assert result.exit_code == 0
+        assert "Config file permissions" in result.stdout
+        assert "Some checks raised warnings" in result.stdout
+
