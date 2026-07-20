@@ -129,6 +129,14 @@ class TestConfigEdit:
         assert result.exit_code == 1
         assert "not found" in result.stdout
 
+    def test_config_encrypt(self):
+        runner.invoke(
+            app, ["config", "add", "x", "openai", "--key", "secret123"]
+        )
+        result = runner.invoke(app, ["config", "encrypt"])
+        assert result.exit_code == 0
+        assert "encrypted" in result.stdout.lower()
+
 
 class TestConfigList:
     def test_empty_list(self):
@@ -640,3 +648,59 @@ class TestStatus:
         result = runner.invoke(app, ["status"])
         assert result.exit_code == 0
         assert "pro" in result.stdout
+
+    def test_status_with_syncs(self, monkeypatch: pytest.MonkeyPatch):
+        runner.invoke(app, ["config", "add", "my-openai", "openai", "-k", "test-key"])
+        import ai_spend.providers.registry
+
+        def _fake_provider(*args, **kwargs):
+            class Fake:
+                name = "my-openai"
+                api_key = "test-key"
+                provider_type = None
+
+                def fetch_usage(self, start, end):
+                    return []
+
+            return Fake()
+
+        monkeypatch.setattr(
+            ai_spend.providers.registry, "get_provider", _fake_provider, raising=False
+        )
+        runner.invoke(app, ["sync"])
+        result = runner.invoke(app, ["status"])
+        assert result.exit_code == 0
+        assert "SUCCESS" in result.stdout or "my-openai" in result.stdout
+
+
+class TestGracefulShutdown:
+    def test_normal_exit_does_not_close_store(self):
+        from ai_spend.cli import _GracefulShutdown
+
+        class MockStore:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        store = MockStore()
+        with _GracefulShutdown(store) as shutdown:
+            assert not shutdown.signaled
+        assert not store.closed
+
+    def test_signal_closes_store(self):
+        from ai_spend.cli import _GracefulShutdown
+
+        class MockStore:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        store = MockStore()
+        with _GracefulShutdown(store) as shutdown:
+            shutdown._handler(2, None)
+            assert shutdown.signaled
+        assert store.closed

@@ -3,7 +3,7 @@
 [![CI](https://github.com/AreteDriver/ai-spend/actions/workflows/ci.yml/badge.svg)](https://github.com/AreteDriver/ai-spend/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/AreteDriver/ai-spend/actions/workflows/codeql.yml/badge.svg)](https://github.com/AreteDriver/ai-spend/actions/workflows/codeql.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![License: BSL-1.1](https://img.shields.io/badge/License-BSL--1.1-blue.svg)](https://mariadb.com/bsl11/)
 
 **`htop` for AI spend.** Local-first, cross-provider, terminal-native. No proxies. No dashboards. No SDK changes.
 
@@ -82,18 +82,24 @@ ai-spend --install-completion
 ai-spend config add <provider>       # Add a provider (anthropic, openai, openrouter, manual)
 ai-spend config remove <provider>  # Remove a provider
 ai-spend config list               # List configured providers
+ai-spend config edit <name> --key <new-key>    # Rotate API key
+ai-spend config edit <name> --type <new-type>  # Change provider type
 ai-spend config validate           # Check API keys without syncing
+ai-spend config encrypt            # Encrypt all API keys at rest
 
 # Sync usage data from provider APIs
 ai-spend sync
 ai-spend sync --dry-run            # Preview only
 ai-spend sync --provider <name>    # Sync a single provider
+ai-spend sync --since 2026-01-01   # Custom start date (default: 30 days)
 
 # View spend
 ai-spend summary                   # Aggregated totals
 ai-spend summary --json            # JSON output
+ai-spend summary --provider <name> # Filter by provider
 ai-spend daily                     # Daily breakdown
 ai-spend daily --last 7            # Last 7 days
+ai-spend daily --provider <name>   # Filter by provider
 
 # Budgets
 ai-spend budget set 100            # Set monthly budget ($100)
@@ -110,9 +116,14 @@ ai-spend export --format json
 ai-spend import records.json --format json
 ai-spend import records.csv --format csv
 
+# Data maintenance
+ai-spend prune --older-than 90     # Delete records older than 90 days
+ai-spend prune --older-than 90 --dry-run  # Preview deletion
+
 # Status
 ai-spend status                    # License tier + system info
 ai-spend stats                     # Telemetry (set AI_SPEND_TELEMETRY=1)
+ai-spend stats --json              # Structured JSON telemetry
 ```
 
 ## How It Works
@@ -125,7 +136,7 @@ Provider APIs ──→ ai-spend sync ──→ Local SQLite
                               ai-spend summary/daily/budget
 ```
 
-1. **Configure** — Add provider API keys (stored locally in `~/.ai-spend/config.yaml` with `0700` permissions)
+1. **Configure** — Add provider API keys (stored locally in `~/.ai-spend/config.yaml` with `0700` permissions, optionally encrypted at rest via `ai-spend config encrypt`)
 2. **Sync** — Pulls usage records from official billing APIs into a local SQLite database (WAL mode, schema migrations)
 3. **Query** — All read commands (`summary`, `daily`, `budget`, `export`) hit the local database only
 

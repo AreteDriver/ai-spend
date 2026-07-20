@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import signal
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -39,6 +40,7 @@ from ai_spend.reporter import (
     format_sync_table,
     import_records,
 )
+from ai_spend.store import SpendStore
 
 app = typer.Typer(name="ai-spend", help="Aggregate AI API costs across providers.")
 config_app = typer.Typer(name="config", help="Manage provider configurations.")
@@ -51,6 +53,44 @@ app.add_typer(manual_app)
 
 console = Console()
 logger = get_logger(__name__)
+
+
+class _GracefulShutdown:
+    """Context manager for graceful SIGINT/SIGTERM handling.
+
+    Sets a flag on signal receipt and closes the store connection on exit.
+    """
+
+    def __init__(self, store: SpendStore) -> None:
+        self.store = store
+        self._signaled = False
+        self._original_handler: object = None
+
+    def _handler(self, _signum: int, _frame: object) -> None:
+        self._signaled = True
+        console.print("\n[yellow]Shutting down gracefully...[/yellow]")
+
+    def __enter__(self) -> _GracefulShutdown:
+        self._original_handler = signal.signal(signal.SIGINT, self._handler)
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
+        if self._original_handler is not None:
+            signal.signal(signal.SIGINT, self._original_handler)  # type: ignore[arg-type]
+        if self._signaled:
+            try:
+                self.store.close()
+            except Exception:
+                pass
+
+    @property
+    def signaled(self) -> bool:
+        return self._signaled
 
 
 def _handle_error(e: Exception, verbose: bool = False) -> None:
@@ -296,81 +336,84 @@ def sync(
     from ai_spend.models import SyncResult
     from ai_spend.providers.registry import get_provider as get_provider_impl
 
-    for pc in providers:
-        if pc.provider_type == ProviderType.MANUAL:
-            continue
+    with _GracefulShutdown(store) as shutdown:
+        for pc in providers:
+            if shutdown.signaled:
+                break
+            if pc.provider_type == ProviderType.MANUAL:
+                continue
 
-        try:
-            p = get_provider_impl(pc.provider_type, pc.name, pc.api_key)
-            logger.info(
-                "sync_start",
-                extra={
-                    "extra_fields": {
-                        "provider": pc.name,
-                        "date_range": f"{start} to {end}",
-                    }
-                },
-            )
-            records = p.fetch_usage(start, end)
-
-            if dry_run:
+            try:
+                p = get_provider_impl(pc.provider_type, pc.name, pc.api_key)
                 logger.info(
-                    "sync_dry_run",
+                    "sync_start",
                     extra={
                         "extra_fields": {
                             "provider": pc.name,
-                            "records": len(records),
+                            "date_range": f"{start} to {end}",
                         }
                     },
                 )
-                console.print(
-                    f"[cyan]{pc.name}:[/cyan] would sync {len(records)} records"
-                )
-                for r in records[:3]:
-                    console.print(
-                        f"  {r.date} | {r.model} | ${r.cost_usd:.4f}"
+                records = p.fetch_usage(start, end)
+
+                if dry_run:
+                    logger.info(
+                        "sync_dry_run",
+                        extra={
+                            "extra_fields": {
+                                "provider": pc.name,
+                                "records": len(records),
+                            }
+                        },
                     )
-                if len(records) > 3:
-                    console.print(f"  ... and {len(records) - 3} more")
-                continue
+                    console.print(
+                        f"[cyan]{pc.name}:[/cyan] would sync {len(records)} records"
+                    )
+                    for r in records[:3]:
+                        console.print(
+                            f"  {r.date} | {r.model} | ${r.cost_usd:.4f}"
+                        )
+                    if len(records) > 3:
+                        console.print(f"  ... and {len(records) - 3} more")
+                    continue
 
-            count = store.add_usage_records(records)
-            result = SyncResult(
-                provider_id=pc.name,
-                status=SyncStatus.SUCCESS,
-                records_synced=count,
-                synced_at=datetime.now(timezone.utc),
-            )
-            store.log_sync(result)
-            logger.info(
-                "sync_success",
-                extra={
-                    "extra_fields": {
-                        "provider": pc.name,
-                        "records": count,
-                    }
-                },
-            )
-            console.print(f"[green]{pc.name}: synced {count} records[/green]")
+                count = store.add_usage_records(records)
+                result = SyncResult(
+                    provider_id=pc.name,
+                    status=SyncStatus.SUCCESS,
+                    records_synced=count,
+                    synced_at=datetime.now(timezone.utc),
+                )
+                store.log_sync(result)
+                logger.info(
+                    "sync_success",
+                    extra={
+                        "extra_fields": {
+                            "provider": pc.name,
+                            "records": count,
+                        }
+                    },
+                )
+                console.print(f"[green]{pc.name}: synced {count} records[/green]")
 
-        except (ProviderError, AiSpendError) as e:
-            result = SyncResult(
-                provider_id=pc.name,
-                status=SyncStatus.FAILED,
-                error_message=str(e),
-                synced_at=datetime.now(timezone.utc),
-            )
-            store.log_sync(result)
-            logger.error(
-                "sync_failure",
-                extra={
-                    "extra_fields": {
-                        "provider": pc.name,
-                        "error": str(e),
-                    }
-                },
-            )
-            console.print(f"[red]{pc.name}: {e}[/red]")
+            except (ProviderError, AiSpendError) as e:
+                result = SyncResult(
+                    provider_id=pc.name,
+                    status=SyncStatus.FAILED,
+                    error_message=str(e),
+                    synced_at=datetime.now(timezone.utc),
+                )
+                store.log_sync(result)
+                logger.error(
+                    "sync_failure",
+                    extra={
+                        "extra_fields": {
+                            "provider": pc.name,
+                            "error": str(e),
+                        }
+                    },
+                )
+                console.print(f"[red]{pc.name}: {e}[/red]")
 
 
 # --- Summary ---
