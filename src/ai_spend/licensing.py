@@ -14,7 +14,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 if sys.version_info >= (3, 11):
     from enum import StrEnum
@@ -95,7 +95,7 @@ def _read_cache() -> dict[str, Any] | None:
         cached_at = data.get("cached_at", 0)
         if time.time() - cached_at > _CACHE_TTL_SECONDS:
             return None
-        return data
+        return cast(dict[str, Any], data)
     except (OSError, json.JSONDecodeError, TypeError):
         return None
 
@@ -131,7 +131,7 @@ def _validate_server(key: str) -> dict[str, Any] | None:
             timeout=5.0,
         )
         if resp.status_code == 200:
-            return resp.json()
+            return cast(dict[str, Any], resp.json())
     except Exception:
         logger.debug("License server unreachable, falling back to local validation")
 

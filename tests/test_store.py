@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -89,7 +90,7 @@ class TestProviderCRUD:
                     provider_type=ProviderType.ANTHROPIC,
                     date=date(2026, 2, 19),
                     model="claude",
-                    cost_usd=1.0,
+                    cost_usd=Decimal("1.0"),
                 )
             ]
         )
@@ -109,14 +110,14 @@ class TestUsageRecords:
                 model="claude-sonnet",
                 input_tokens=1000,
                 output_tokens=500,
-                cost_usd=0.015,
+                cost_usd=Decimal("0.015"),
             )
         ]
         count = store.add_usage_records(records)
         assert count == 1
         got = store.get_usage_by_date_range(date(2026, 2, 1), date(2026, 2, 28))
         assert len(got) == 1
-        assert got[0].cost_usd == 0.015
+        assert got[0].cost_usd == Decimal("0.015")
 
     def test_empty_list(self, store: SpendStore):
         assert store.add_usage_records([]) == 0
@@ -128,7 +129,7 @@ class TestUsageRecords:
             provider_type=ProviderType.ANTHROPIC,
             date=date(2026, 2, 19),
             model="claude",
-            cost_usd=1.0,
+            cost_usd=Decimal("1.0"),
         )
         store.add_usage_records([r])
         # Insert same record again with different cost — should update
@@ -137,12 +138,12 @@ class TestUsageRecords:
             provider_type=ProviderType.ANTHROPIC,
             date=date(2026, 2, 19),
             model="claude",
-            cost_usd=2.0,
+            cost_usd=Decimal("2.0"),
         )
         store.add_usage_records([r2])
         got = store.get_usage_by_date_range(date(2026, 2, 1), date(2026, 2, 28))
         assert len(got) == 1
-        assert got[0].cost_usd == 2.0
+        assert got[0].cost_usd == Decimal("2.0")
 
     def test_filter_by_provider(self, store: SpendStore):
         store.add_provider("a", ProviderType.ANTHROPIC)
@@ -154,14 +155,14 @@ class TestUsageRecords:
                     provider_type=ProviderType.ANTHROPIC,
                     date=date(2026, 2, 19),
                     model="claude",
-                    cost_usd=1.0,
+                    cost_usd=Decimal("1.0"),
                 ),
                 UsageRecord(
                     provider_id="o",
                     provider_type=ProviderType.OPENAI,
                     date=date(2026, 2, 19),
                     model="gpt-4o",
-                    cost_usd=2.0,
+                    cost_usd=Decimal("2.0"),
                 ),
             ]
         )
@@ -181,14 +182,14 @@ class TestUsageRecords:
                     provider_type=ProviderType.ANTHROPIC,
                     date=date(2026, 2, 19),
                     model="claude",
-                    cost_usd=1.0,
+                    cost_usd=Decimal("1.0"),
                 ),
                 UsageRecord(
                     provider_id="a",
                     provider_type=ProviderType.ANTHROPIC,
                     date=date(2026, 2, 18),
                     model="claude",
-                    cost_usd=2.0,
+                    cost_usd=Decimal("2.0"),
                 ),
             ]
         )
@@ -205,28 +206,28 @@ class TestDailyTotals:
                     provider_type=ProviderType.ANTHROPIC,
                     date=date(2026, 2, 18),
                     model="claude",
-                    cost_usd=1.0,
+                    cost_usd=Decimal("1.0"),
                 ),
                 UsageRecord(
                     provider_id="a",
                     provider_type=ProviderType.ANTHROPIC,
                     date=date(2026, 2, 18),
                     model="haiku",
-                    cost_usd=0.5,
+                    cost_usd=Decimal("0.5"),
                 ),
                 UsageRecord(
                     provider_id="a",
                     provider_type=ProviderType.ANTHROPIC,
                     date=date(2026, 2, 19),
                     model="claude",
-                    cost_usd=2.0,
+                    cost_usd=Decimal("2.0"),
                 ),
             ]
         )
         days = store.get_daily_totals(date(2026, 2, 1), date(2026, 2, 28))
         assert len(days) == 2
         assert days[0].date == date(2026, 2, 18)
-        assert days[0].total_usd == pytest.approx(1.5)
+        assert days[0].total_usd == Decimal("1.5")
         assert days[1].date == date(2026, 2, 19)
 
     def test_empty_range(self, store: SpendStore):
@@ -245,37 +246,37 @@ class TestMonthlySummary:
                     provider_type=ProviderType.ANTHROPIC,
                     date=date(2026, 2, 18),
                     model="claude",
-                    cost_usd=10.0,
+                    cost_usd=Decimal("10.0"),
                 ),
                 UsageRecord(
                     provider_id="o",
                     provider_type=ProviderType.OPENAI,
                     date=date(2026, 2, 19),
                     model="gpt-4o",
-                    cost_usd=5.0,
+                    cost_usd=Decimal("5.0"),
                 ),
             ]
         )
         s = store.get_monthly_summary(date(2026, 2, 1), date(2026, 2, 28))
-        assert s.total_usd == pytest.approx(15.0)
+        assert s.total_usd == Decimal("15")
         assert s.record_count == 2
-        assert s.by_provider["a"] == pytest.approx(10.0)
-        assert s.by_provider["o"] == pytest.approx(5.0)
-        assert s.by_model["claude"] == pytest.approx(10.0)
+        assert s.by_provider["a"] == Decimal("10")
+        assert s.by_provider["o"] == Decimal("5")
+        assert s.by_model["claude"] == Decimal("10")
 
     def test_empty_summary(self, store: SpendStore):
         s = store.get_monthly_summary(date(2026, 1, 1), date(2026, 1, 31))
-        assert s.total_usd == 0.0
+        assert s.total_usd == Decimal("0")
         assert s.record_count == 0
 
 
 class TestBudget:
     def test_set_and_get(self, store: SpendStore):
-        b = BudgetConfig(total_usd=100.0, period=BucketWidth.MONTH)
+        b = BudgetConfig(total_usd=Decimal("100"), period=BucketWidth.MONTH)
         store.set_budget(b)
         got = store.get_budget()
         assert got is not None
-        assert got.total_usd == 100.0
+        assert got.total_usd == Decimal("100")
         assert got.period == BucketWidth.MONTH
         assert got.alert_thresholds == [0.8, 0.9, 1.0]
 
@@ -283,11 +284,13 @@ class TestBudget:
         assert store.get_budget() is None
 
     def test_update_budget(self, store: SpendStore):
-        store.set_budget(BudgetConfig(total_usd=50.0))
-        store.set_budget(BudgetConfig(total_usd=200.0, period=BucketWidth.WEEK))
+        store.set_budget(BudgetConfig(total_usd=Decimal("50")))
+        store.set_budget(
+            BudgetConfig(total_usd=Decimal("200"), period=BucketWidth.WEEK)
+        )
         got = store.get_budget()
         assert got is not None
-        assert got.total_usd == 200.0
+        assert got.total_usd == Decimal("200")
         assert got.period == BucketWidth.WEEK
 
 
@@ -351,6 +354,26 @@ class TestSyncLog:
         assert len(all_syncs) == 2
 
 
+class TestTransaction:
+    def test_transaction_commit(self, store: SpendStore):
+        with store.transaction() as conn:
+            conn.execute(
+                "INSERT INTO providers (name, provider_type) VALUES (?, ?)",
+                ("tx", "anthropic"),
+            )
+        assert store.get_provider("tx") is not None
+
+    def test_transaction_rollback(self, store: SpendStore):
+        with pytest.raises(RuntimeError):
+            with store.transaction() as conn:
+                conn.execute(
+                    "INSERT INTO providers (name, provider_type) VALUES (?, ?)",
+                    ("tx-rollback", "anthropic"),
+                )
+                raise RuntimeError("abort")
+        assert store.get_provider("tx-rollback") is None
+
+
 class TestUtilities:
     def test_get_total_spend_current_period(self, store: SpendStore):
         store.add_provider("a", ProviderType.ANTHROPIC)
@@ -361,12 +384,28 @@ class TestUtilities:
                     provider_type=ProviderType.ANTHROPIC,
                     date=date.today(),
                     model="claude",
-                    cost_usd=5.0,
+                    cost_usd=Decimal("5.0"),
                 ),
             ]
         )
         total = store.get_total_spend_current_period(BucketWidth.MONTH)
-        assert total == pytest.approx(5.0)
+        assert total == Decimal("5")
+
+    def test_get_total_spend_day(self, store: SpendStore):
+        store.add_provider("a", ProviderType.ANTHROPIC)
+        store.add_usage_records(
+            [
+                UsageRecord(
+                    provider_id="a",
+                    provider_type=ProviderType.ANTHROPIC,
+                    date=date.today(),
+                    model="claude",
+                    cost_usd=Decimal("3.0"),
+                ),
+            ]
+        )
+        total = store.get_total_spend_current_period(BucketWidth.DAY)
+        assert total == Decimal("3")
 
     def test_reset(self, store: SpendStore):
         store.add_provider("a", ProviderType.ANTHROPIC)
@@ -377,11 +416,11 @@ class TestUtilities:
                     provider_type=ProviderType.ANTHROPIC,
                     date=date(2026, 2, 19),
                     model="claude",
-                    cost_usd=1.0,
+                    cost_usd=Decimal("1.0"),
                 ),
             ]
         )
-        store.set_budget(BudgetConfig(total_usd=100.0))
+        store.set_budget(BudgetConfig(total_usd=Decimal("100")))
         store.reset()
         assert store.list_providers() == []
         assert store.get_record_count() == 0

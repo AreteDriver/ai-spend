@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 import httpx
 
 from ai_spend.exceptions import ProviderError
 from ai_spend.models import ProviderType, UsageRecord
-from ai_spend.providers.base import BaseProvider
+from ai_spend.providers.base import BaseProvider, _make_request
 from ai_spend.providers.registry import register_provider
 
 _BASE_URL = "https://api.anthropic.com/v1/organizations"
@@ -36,7 +37,9 @@ class AnthropicProvider(BaseProvider):
                     if cursor:
                         params["cursor"] = cursor
 
-                    resp = client.get(
+                    resp = _make_request(
+                        client,
+                        "GET",
                         f"{_BASE_URL}/cost_report",
                         headers={
                             "x-api-key": self.api_key,
@@ -44,7 +47,6 @@ class AnthropicProvider(BaseProvider):
                         },
                         params=params,
                     )
-                    resp.raise_for_status()
                     data = resp.json()
 
                     for bucket in data.get("data", []):
@@ -53,7 +55,7 @@ class AnthropicProvider(BaseProvider):
                             model_name = model_entry.get("model", "unknown")
                             # Anthropic returns costs in USD as decimal strings
                             cost_str = model_entry.get("cost", "0")
-                            cost = float(cost_str)
+                            cost = Decimal(cost_str)
                             input_tokens = model_entry.get("input_tokens", 0)
                             output_tokens = model_entry.get("output_tokens", 0)
                             records.append(
@@ -83,13 +85,16 @@ class AnthropicProvider(BaseProvider):
         """Validate Anthropic admin API key."""
         try:
             with httpx.Client(timeout=10.0) as client:
-                resp = client.get(
+                resp = _make_request(
+                    client,
+                    "GET",
                     f"{_BASE_URL}/cost_report",
                     headers={
                         "x-api-key": self.api_key,
                         "anthropic-version": "2023-06-01",
                     },
                     params={"start_date": "2026-01-01", "end_date": "2026-01-01"},
+                    max_attempts=1,  # No retry for simple credential check
                 )
                 return resp.status_code == 200
         except httpx.HTTPError:

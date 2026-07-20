@@ -5,18 +5,15 @@ from __future__ import annotations
 import os
 import stat
 from pathlib import Path
+from typing import Any
 
 import yaml
 
 from ai_spend.exceptions import ConfigError
 from ai_spend.models import ProviderConfig, ProviderType
-from ai_spend.store import SpendStore
 
 _DEFAULT_DIR = Path.home() / ".ai-spend"
 _CONFIG_FILE = "config.yaml"
-_DB_FILE = "spend.db"
-
-_store_instance: SpendStore | None = None
 
 
 def get_config_dir() -> Path:
@@ -25,8 +22,10 @@ def get_config_dir() -> Path:
 
 
 def _ensure_config_dir(config_dir: Path) -> None:
-    """Create config dir with secure permissions if it doesn't exist."""
-    config_dir.mkdir(parents=True, exist_ok=True)
+    """Create config dir with secure permissions (owner-only, 0o700)."""
+    if not config_dir.exists():
+        config_dir.mkdir(parents=True, exist_ok=False)
+    config_dir.chmod(0o700)
 
 
 def _config_path(config_dir: Path | None = None) -> Path:
@@ -34,12 +33,7 @@ def _config_path(config_dir: Path | None = None) -> Path:
     return d / _CONFIG_FILE
 
 
-def _db_path(config_dir: Path | None = None) -> Path:
-    d = config_dir or get_config_dir()
-    return d / _DB_FILE
-
-
-def _load_config(config_dir: Path | None = None) -> dict:
+def _load_config(config_dir: Path | None = None) -> dict[str, Any]:
     """Load YAML config from disk."""
     path = _config_path(config_dir)
     if not path.exists():
@@ -52,7 +46,7 @@ def _load_config(config_dir: Path | None = None) -> dict:
         raise ConfigError(f"Failed to read config: {e}") from e
 
 
-def _save_config(data: dict, config_dir: Path | None = None) -> None:
+def _save_config(data: dict[str, Any], config_dir: Path | None = None) -> None:
     """Save YAML config to disk with 0o600 permissions."""
     d = config_dir or get_config_dir()
     _ensure_config_dir(d)
@@ -115,21 +109,3 @@ def get_provider(name: str, config_dir: Path | None = None) -> ProviderConfig | 
         if p.name == name:
             return p
     return None
-
-
-def get_store(config_dir: Path | None = None) -> SpendStore:
-    """Get or create the singleton SpendStore."""
-    global _store_instance
-    if _store_instance is None:
-        path = _db_path(config_dir)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        _store_instance = SpendStore(path)
-    return _store_instance
-
-
-def reset_store() -> None:
-    """Reset the store singleton (for testing)."""
-    global _store_instance
-    if _store_instance is not None:
-        _store_instance.close()
-    _store_instance = None

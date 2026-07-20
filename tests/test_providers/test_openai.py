@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -47,7 +48,7 @@ class TestOpenAIProvider:
         records = provider.fetch_usage(date(2026, 2, 19), date(2026, 2, 19))
         assert len(records) == 1
         assert records[0].model == "gpt-4o"
-        assert records[0].cost_usd == 0.05
+        assert records[0].cost_usd == Decimal("0.05")
 
     @respx.mock
     def test_fetch_usage_pagination(self, provider: OpenAIProvider):
@@ -161,4 +162,4 @@ class TestOpenAIProvider:
             )
         )
         records = provider.fetch_usage(date(2026, 2, 19), date(2026, 2, 19))
-        assert records[0].cost_usd == 0.0
+        assert records[0].cost_usd == Decimal("0")

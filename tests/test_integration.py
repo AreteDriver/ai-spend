@@ -9,7 +9,6 @@ import pytest
 from typer.testing import CliRunner
 
 from ai_spend.cli import app
-from ai_spend.config import reset_store
 from ai_spend.licensing import generate_key
 
 runner = CliRunner()
@@ -21,9 +20,7 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     config_dir.mkdir()
     monkeypatch.setenv("AI_SPEND_DIR", str(config_dir))
     monkeypatch.delenv("AI_SPEND_LICENSE", raising=False)
-    reset_store()
     yield
-    reset_store()
 
 
 class TestEndToEnd:
@@ -46,10 +43,10 @@ class TestEndToEnd:
         assert r.exit_code == 0
 
         # 3. Check summary
-        r = runner.invoke(app, ["summary", "--json"])
+        r = runner.invoke(app, ["summary", "--json", "--days", "180"])
         assert r.exit_code == 0
         data = json.loads(r.stdout)
-        assert data["total_usd"] == pytest.approx(15.0)
+        assert data["total_usd"] == "15.00"
         assert data["record_count"] == 2
 
         # 4. Set and check budget
@@ -67,7 +64,9 @@ class TestEndToEnd:
         key = generate_key()
         monkeypatch.setenv("AI_SPEND_LICENSE", key)
         out = tmp_path / "export.json"
-        r = runner.invoke(app, ["export", "-f", "json", "-o", str(out)])
+        r = runner.invoke(
+            app, ["export", "-f", "json", "-o", str(out), "--days", "180"]
+        )
         assert r.exit_code == 0
         assert out.exists()
         exported = json.loads(out.read_text())

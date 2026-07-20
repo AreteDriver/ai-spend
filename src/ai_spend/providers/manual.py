@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 from ai_spend.models import ProviderType, UsageRecord
 from ai_spend.providers.base import BaseProvider
@@ -27,7 +28,7 @@ class ManualProvider(BaseProvider):
     def create_entry(
         self,
         model: str,
-        cost_usd: float,
+        cost_usd: Decimal,
         entry_date: date | None = None,
         note: str = "",
     ) -> UsageRecord:

@@ -238,3 +238,41 @@ def _export_csv(records: list[UsageRecord]) -> str:
             ]
         )
     return output.getvalue()
+
+
+def import_records(data: str, fmt: ExportFormat) -> list[UsageRecord]:
+    """Import usage records from JSON or CSV string."""
+    if fmt == ExportFormat.JSON:
+        return _import_json(data)
+    elif fmt == ExportFormat.CSV:
+        return _import_csv(data)
+    else:
+        raise ExportError(f"Unsupported import format: {fmt}")
+
+
+def _import_json(data: str) -> list[UsageRecord]:
+    items = json.loads(data)
+    if not isinstance(items, list):
+        raise ExportError("JSON import expects a list of records")
+    records: list[UsageRecord] = []
+    for i, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise ExportError(f"Record {i} is not an object")
+        item.pop("record_id", None)
+        try:
+            records.append(UsageRecord.model_validate(item))
+        except Exception as e:
+            raise ExportError(f"Record {i} invalid: {e}") from e
+    return records
+
+
+def _import_csv(data: str) -> list[UsageRecord]:
+    reader = csv.DictReader(io.StringIO(data))
+    records: list[UsageRecord] = []
+    for i, row in enumerate(reader):
+        row.pop("record_id", None)
+        try:
+            records.append(UsageRecord.model_validate(row))
+        except Exception as e:
+            raise ExportError(f"Record {i} invalid: {e}") from e
+    return records

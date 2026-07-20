@@ -95,17 +95,23 @@ class TelemetryStore:
 
     def get_total_events(self) -> int:
         """Get total number of telemetry events."""
-        row = self._conn.execute("SELECT COUNT(*) as cnt FROM events").fetchone()
-        return row["cnt"]
+        row = self._conn.execute(
+            "SELECT COUNT(*) as cnt FROM events"
+        ).fetchone()
+        return int(row["cnt"])
 
     def get_first_event_time(self) -> str | None:
         """Get timestamp of the earliest event."""
-        row = self._conn.execute("SELECT MIN(timestamp) as ts FROM events").fetchone()
+        row = self._conn.execute(
+            "SELECT MIN(timestamp) as ts FROM events"
+        ).fetchone()
         return row["ts"] if row and row["ts"] else None
 
     def get_last_event_time(self) -> str | None:
         """Get timestamp of the most recent event."""
-        row = self._conn.execute("SELECT MAX(timestamp) as ts FROM events").fetchone()
+        row = self._conn.execute(
+            "SELECT MAX(timestamp) as ts FROM events"
+        ).fetchone()
         return row["ts"] if row and row["ts"] else None
 
     def get_daily_activity(self, last_n_days: int = 7) -> list[tuple[str, int]]:
@@ -121,43 +127,3 @@ class TelemetryStore:
         """Delete all telemetry data."""
         self._conn.execute("DELETE FROM events")
         self._conn.commit()
-
-
-# --- Module-level singleton ---
-
-_store_instance: TelemetryStore | None = None
-
-
-def _get_store() -> TelemetryStore | None:
-    """Get the singleton TelemetryStore, or None if telemetry is disabled."""
-    global _store_instance
-    if not is_enabled():
-        return None
-    if _store_instance is None:
-        from ai_spend.config import get_config_dir
-
-        db_path = get_config_dir() / "telemetry.db"
-        _store_instance = TelemetryStore(db_path)
-    return _store_instance
-
-
-def reset_telemetry_store() -> None:
-    """Reset the telemetry store singleton (for testing)."""
-    global _store_instance
-    if _store_instance is not None:
-        _store_instance.close()
-    _store_instance = None
-
-
-def track_command(name: str) -> None:
-    """Record a CLI command invocation. No-op if telemetry is disabled."""
-    store = _get_store()
-    if store is not None:
-        store.record("command", name)
-
-
-def track_pro_gate(feature: str) -> None:
-    """Record a Pro feature gate hit. No-op if telemetry is disabled."""
-    store = _get_store()
-    if store is not None:
-        store.record("pro_gate", feature)

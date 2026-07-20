@@ -12,20 +12,11 @@ from ai_spend.config import (
     _save_config,
     add_provider,
     get_provider,
-    get_store,
     list_providers,
     remove_provider,
-    reset_store,
 )
 from ai_spend.exceptions import ConfigError
 from ai_spend.models import ProviderType
-
-
-@pytest.fixture(autouse=True)
-def _clean_store():
-    """Reset the store singleton after each test."""
-    yield
-    reset_store()
 
 
 class TestLoadSaveConfig:
@@ -121,21 +112,3 @@ class TestProviderCRUD:
         assert "c" in names
 
 
-class TestGetStore:
-    def test_get_store_creates_db(self, tmp_config_dir: Path):
-        store = get_store(tmp_config_dir)
-        assert (tmp_config_dir / "spend.db").exists()
-        store.close()
-
-    def test_singleton(self, tmp_config_dir: Path):
-        s1 = get_store(tmp_config_dir)
-        s2 = get_store(tmp_config_dir)
-        assert s1 is s2
-        s1.close()
-
-    def test_reset_store(self, tmp_config_dir: Path):
-        s1 = get_store(tmp_config_dir)
-        reset_store()
-        s2 = get_store(tmp_config_dir)
-        assert s1 is not s2
-        s2.close()

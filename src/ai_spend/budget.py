@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from ai_spend.exceptions import BudgetError
 from ai_spend.models import BudgetConfig, BudgetStatus
 from ai_spend.store import SpendStore
@@ -15,15 +17,15 @@ def check_budget(store: SpendStore) -> BudgetStatus:
 
     spent = store.get_total_spend_current_period(budget.period)
     remaining = budget.total_usd - spent
-    utilization = spent / budget.total_usd if budget.total_usd > 0 else 0.0
+    utilization = float(spent / budget.total_usd) if budget.total_usd > 0 else 0.0
 
     exceeded = [t for t in budget.alert_thresholds if utilization >= t]
 
     return BudgetStatus(
         budget=budget,
-        spent_usd=round(spent, 2),
-        remaining_usd=round(remaining, 2),
-        utilization=round(utilization, 4),
+        spent_usd=spent,
+        remaining_usd=remaining,
+        utilization=utilization,
         exceeded_thresholds=exceeded,
         is_over_budget=spent >= budget.total_usd,
     )
@@ -31,12 +33,13 @@ def check_budget(store: SpendStore) -> BudgetStatus:
 
 def set_budget(
     store: SpendStore,
-    total_usd: float,
+    total_usd: Decimal | float | str,
     period: str = "month",
     thresholds: list[float] | None = None,
 ) -> BudgetConfig:
     """Set or update the budget."""
-    if total_usd <= 0:
+    total = Decimal(str(total_usd)) if not isinstance(total_usd, Decimal) else total_usd
+    if total <= 0:
         raise BudgetError("Budget must be greater than zero")
 
     from ai_spend.models import BucketWidth
@@ -47,7 +50,7 @@ def set_budget(
         raise BudgetError(f"Invalid period: {period}") from e
 
     budget = BudgetConfig(
-        total_usd=total_usd,
+        total_usd=total,
         period=bucket,
         alert_thresholds=thresholds or [0.8, 0.9, 1.0],
     )

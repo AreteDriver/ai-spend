@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -47,7 +48,7 @@ class TestAnthropicProvider:
         records = provider.fetch_usage(date(2026, 2, 19), date(2026, 2, 19))
         assert len(records) == 1
         assert records[0].model == "claude-sonnet-4-20250514"
-        assert records[0].cost_usd == 0.015
+        assert records[0].cost_usd == Decimal("0.015")
         assert records[0].input_tokens == 1000
 
     @respx.mock

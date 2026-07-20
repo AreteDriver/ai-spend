@@ -222,7 +222,9 @@ class TestGetLicenseWithServer:
         monkeypatch.setenv("AI_SPEND_LICENSE", key)
 
         expired = {
-            "key": key, "tier": "pro", "valid": True,
+            "key": key,
+            "tier": "pro",
+            "valid": True,
             "cached_at": time.time() - 200000,
         }
         cache_file.write_text(json.dumps(expired))

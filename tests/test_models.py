@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 from ai_spend.models import (
     BucketWidth,
@@ -31,7 +32,7 @@ class TestProviderType:
         assert ProviderType("anthropic") is ProviderType.ANTHROPIC
 
     def test_all_members(self):
-        assert len(ProviderType) == 3
+        assert len(ProviderType) == 4
 
 
 class TestBucketWidth:
@@ -74,7 +75,7 @@ class TestUsageRecord:
         assert sample_usage_record.model == "claude-sonnet-4-20250514"
         assert sample_usage_record.input_tokens == 1000
         assert sample_usage_record.output_tokens == 500
-        assert sample_usage_record.cost_usd == 0.015
+        assert sample_usage_record.cost_usd == Decimal("0.015")
 
     def test_record_id_deterministic(self, sample_usage_record: UsageRecord):
         rid = sample_usage_record.record_id
@@ -106,7 +107,7 @@ class TestUsageRecord:
         )
         assert r.input_tokens == 0
         assert r.output_tokens == 0
-        assert r.cost_usd == 0.0
+        assert r.cost_usd == Decimal("0")
         assert r.metadata == {}
 
     def test_metadata(self):
@@ -170,12 +171,12 @@ class TestProviderConfig:
 
 class TestBudgetConfig:
     def test_create(self, sample_budget: BudgetConfig):
-        assert sample_budget.total_usd == 100.0
+        assert sample_budget.total_usd == Decimal("100")
         assert sample_budget.period == BucketWidth.MONTH
         assert sample_budget.alert_thresholds == [0.8, 0.9, 1.0]
 
     def test_custom_thresholds(self):
-        b = BudgetConfig(total_usd=50.0, alert_thresholds=[0.5, 0.75])
+        b = BudgetConfig(total_usd=Decimal("50"), alert_thresholds=[0.5, 0.75])
         assert b.alert_thresholds == [0.5, 0.75]
 
 
@@ -210,7 +211,7 @@ class TestSyncResult:
 class TestSpendSummary:
     def test_defaults(self):
         s = SpendSummary()
-        assert s.total_usd == 0.0
+        assert s.total_usd == Decimal("0")
         assert s.by_provider == {}
         assert s.by_model == {}
         assert s.record_count == 0
@@ -219,14 +220,17 @@ class TestSpendSummary:
 
     def test_populated(self):
         s = SpendSummary(
-            total_usd=42.50,
-            by_provider={"anthropic": 30.0, "openai": 12.50},
-            by_model={"claude-sonnet-4-20250514": 30.0, "gpt-4o": 12.50},
+            total_usd=Decimal("42.50"),
+            by_provider={"anthropic": Decimal("30"), "openai": Decimal("12.50")},
+            by_model={
+                "claude-sonnet-4-20250514": Decimal("30"),
+                "gpt-4o": Decimal("12.50"),
+            },
             record_count=100,
             start_date=date(2026, 1, 1),
             end_date=date(2026, 2, 19),
         )
-        assert s.total_usd == 42.50
+        assert s.total_usd == Decimal("42.50")
         assert len(s.by_provider) == 2
 
 
@@ -235,13 +239,13 @@ class TestSpendSummary:
 
 class TestDailySpend:
     def test_create(self):
-        d = DailySpend(date=date(2026, 2, 19), total_usd=5.0, record_count=10)
-        assert d.total_usd == 5.0
+        d = DailySpend(date=date(2026, 2, 19), total_usd=Decimal("5"), record_count=10)
+        assert d.total_usd == Decimal("5")
         assert d.record_count == 10
 
     def test_defaults(self):
         d = DailySpend(date=date(2026, 2, 19))
-        assert d.total_usd == 0.0
+        assert d.total_usd == Decimal("0")
         assert d.by_provider == {}
         assert d.by_model == {}
 
@@ -253,8 +257,8 @@ class TestBudgetStatus:
     def test_under_budget(self, sample_budget: BudgetConfig):
         bs = BudgetStatus(
             budget=sample_budget,
-            spent_usd=50.0,
-            remaining_usd=50.0,
+            spent_usd=Decimal("50"),
+            remaining_usd=Decimal("50"),
             utilization=0.5,
         )
         assert not bs.is_over_budget
@@ -263,8 +267,8 @@ class TestBudgetStatus:
     def test_over_budget(self, sample_budget: BudgetConfig):
         bs = BudgetStatus(
             budget=sample_budget,
-            spent_usd=110.0,
-            remaining_usd=-10.0,
+            spent_usd=Decimal("110"),
+            remaining_usd=Decimal("-10"),
             utilization=1.1,
             exceeded_thresholds=[0.8, 0.9, 1.0],
             is_over_budget=True,

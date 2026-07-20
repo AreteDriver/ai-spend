@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,6 @@ def _no_server_validation(monkeypatch, tmp_path):
     monkeypatch.setattr("ai_spend.licensing._validate_server", lambda k: None)
     monkeypatch.setattr("ai_spend.licensing._CACHE_FILE", tmp_path / "no_cache.json")
     monkeypatch.setattr("ai_spend.licensing._CACHE_DIR", tmp_path)
-
 
 
 @pytest.fixture
@@ -51,7 +51,7 @@ def sample_usage_record() -> UsageRecord:
         model="claude-sonnet-4-20250514",
         input_tokens=1000,
         output_tokens=500,
-        cost_usd=0.015,
+        cost_usd=Decimal("0.015"),
     )
 
 
@@ -69,7 +69,7 @@ def sample_provider_config() -> ProviderConfig:
 def sample_budget() -> BudgetConfig:
     """A sample budget config."""
     return BudgetConfig(
-        total_usd=100.0,
+        total_usd=Decimal("100"),
         period=BucketWidth.MONTH,
     )
 

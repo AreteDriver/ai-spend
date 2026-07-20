@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import sys
 from datetime import date, datetime
+from decimal import Decimal
+from typing import Annotated
 
 if sys.version_info >= (3, 11):
     from enum import StrEnum
@@ -15,7 +17,7 @@ else:
         pass
 
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, PlainSerializer, computed_field
 
 
 class ProviderType(StrEnum):
@@ -50,6 +52,14 @@ class SyncStatus(StrEnum):
     FAILED = "failed"
 
 
+# Money values use Decimal for exact financial arithmetic.
+# Serialized as string in JSON mode to preserve precision.
+Money = Annotated[
+    Decimal,
+    PlainSerializer(lambda x: str(x), return_type=str, when_used="json"),
+]
+
+
 class UsageRecord(BaseModel):
     """A single usage/cost record from a provider."""
 
@@ -59,7 +69,7 @@ class UsageRecord(BaseModel):
     model: str
     input_tokens: int = 0
     output_tokens: int = 0
-    cost_usd: float = 0.0
+    cost_usd: Money = Field(default=Decimal("0.00"))
     metadata: dict[str, str] = Field(default_factory=dict)
 
     @computed_field  # type: ignore[prop-decorator]
@@ -89,7 +99,7 @@ class ProviderConfig(BaseModel):
 class BudgetConfig(BaseModel):
     """Budget configuration for spend tracking."""
 
-    total_usd: float
+    total_usd: Money = Field(default=Decimal("0.00"))
     period: BucketWidth = BucketWidth.MONTH
     alert_thresholds: list[float] = Field(default_factory=lambda: [0.8, 0.9, 1.0])
 
@@ -107,9 +117,9 @@ class SyncResult(BaseModel):
 class SpendSummary(BaseModel):
     """Aggregated spend summary."""
 
-    total_usd: float = 0.0
-    by_provider: dict[str, float] = Field(default_factory=dict)
-    by_model: dict[str, float] = Field(default_factory=dict)
+    total_usd: Money = Field(default=Decimal("0.00"))
+    by_provider: dict[str, Money] = Field(default_factory=dict)
+    by_model: dict[str, Money] = Field(default_factory=dict)
     record_count: int = 0
     start_date: date | None = None
     end_date: date | None = None
@@ -119,9 +129,9 @@ class DailySpend(BaseModel):
     """Spend data for a single day."""
 
     date: date
-    total_usd: float = 0.0
-    by_provider: dict[str, float] = Field(default_factory=dict)
-    by_model: dict[str, float] = Field(default_factory=dict)
+    total_usd: Money = Field(default=Decimal("0.00"))
+    by_provider: dict[str, Money] = Field(default_factory=dict)
+    by_model: dict[str, Money] = Field(default_factory=dict)
     record_count: int = 0
 
 
@@ -129,8 +139,8 @@ class BudgetStatus(BaseModel):
     """Current budget status with threshold checks."""
 
     budget: BudgetConfig
-    spent_usd: float = 0.0
-    remaining_usd: float = 0.0
+    spent_usd: Money = Field(default=Decimal("0.00"))
+    remaining_usd: Money = Field(default=Decimal("0.00"))
     utilization: float = 0.0
     exceeded_thresholds: list[float] = Field(default_factory=list)
     is_over_budget: bool = False

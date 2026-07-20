@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from decimal import Decimal
 
 import httpx
 
 from ai_spend.exceptions import ProviderError
 from ai_spend.models import ProviderType, UsageRecord
-from ai_spend.providers.base import BaseProvider
+from ai_spend.providers.base import BaseProvider, _make_request
 from ai_spend.providers.registry import register_provider
 
 _BASE_URL = "https://api.openai.com/v1/organization"
@@ -44,12 +45,13 @@ class OpenAIProvider(BaseProvider):
                     if cursor:
                         params["cursor"] = cursor
 
-                    resp = client.get(
+                    resp = _make_request(
+                        client,
+                        "GET",
                         f"{_BASE_URL}/costs",
                         headers={"Authorization": f"Bearer {self.api_key}"},
                         params=params,
                     )
-                    resp.raise_for_status()
                     data = resp.json()
 
                     for bucket in data.get("data", []):
@@ -63,7 +65,8 @@ class OpenAIProvider(BaseProvider):
                                 model_name = obj.get("id", "unknown")
                             else:
                                 model_name = result.get("model", "unknown")
-                            cost = float(result.get("amount", {}).get("value", 0.0))
+                            raw_cost = result.get("amount", {}).get("value", 0.0)
+                            cost = Decimal(str(raw_cost))
                             input_tokens = result.get("input_tokens", 0)
                             output_tokens = result.get("output_tokens", 0)
                             records.append(
@@ -93,10 +96,13 @@ class OpenAIProvider(BaseProvider):
         """Validate OpenAI admin API key."""
         try:
             with httpx.Client(timeout=10.0) as client:
-                resp = client.get(
+                resp = _make_request(
+                    client,
+                    "GET",
                     f"{_BASE_URL}/costs",
                     headers={"Authorization": f"Bearer {self.api_key}"},
                     params={"start_time": 0, "end_time": 0},
+                    max_attempts=1,  # No retry for simple credential check
                 )
                 return resp.status_code == 200
         except httpx.HTTPError:

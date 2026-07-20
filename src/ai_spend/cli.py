@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Annotated
 
@@ -12,6 +14,7 @@ from rich.console import Console
 import ai_spend
 from ai_spend import config as cfg
 from ai_spend.budget import check_budget, set_budget
+from ai_spend.context import AppContext
 from ai_spend.exceptions import (
     AiSpendError,
     BudgetError,
@@ -21,6 +24,7 @@ from ai_spend.exceptions import (
 )
 from ai_spend.gates import require_pro
 from ai_spend.licensing import MAX_FREE_PROVIDERS, get_license
+from ai_spend.log import configure_logging, get_logger
 from ai_spend.models import ExportFormat, ProviderType, SyncStatus
 from ai_spend.providers.manual import ManualProvider
 from ai_spend.reporter import (
@@ -33,8 +37,8 @@ from ai_spend.reporter import (
     format_summary_json,
     format_summary_table,
     format_sync_table,
+    import_records,
 )
-from ai_spend.telemetry import track_command
 
 app = typer.Typer(name="ai-spend", help="Aggregate AI API costs across providers.")
 config_app = typer.Typer(name="config", help="Manage provider configurations.")
@@ -46,6 +50,15 @@ app.add_typer(budget_app)
 app.add_typer(manual_app)
 
 console = Console()
+logger = get_logger(__name__)
+
+
+def _handle_error(e: Exception, verbose: bool = False) -> None:
+    """Print error message and exit. Preserves exception chain for debugging."""
+    console.print(f"[red]Error: {e}[/red]")
+    if verbose:
+        console.print_exception()
+    raise typer.Exit(1)
 
 
 def _version_callback(value: bool) -> None:
@@ -56,6 +69,7 @@ def _version_callback(value: bool) -> None:
 
 @app.callback()
 def main(
+    ctx: typer.Context,
     version: Annotated[
         bool | None,
         typer.Option(
@@ -66,8 +80,16 @@ def main(
             help="Show version.",
         ),
     ] = None,
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose", "-V", help="Show verbose output including tracebacks"
+        ),
+    ] = False,
 ) -> None:
     """AI spend tracker CLI."""
+    configure_logging(verbose=verbose)
+    ctx.obj = AppContext.from_env(verbose=verbose)
 
 
 # --- Config commands ---
@@ -75,16 +97,18 @@ def main(
 
 @config_app.command("add")
 def config_add(
+    ctx: typer.Context,
     name: Annotated[str, typer.Argument(help="Provider name")],
     provider_type: Annotated[ProviderType, typer.Argument(help="Provider type")],
     api_key: Annotated[str, typer.Option("--key", "-k", help="API key")] = "",
 ) -> None:
     """Add a provider configuration."""
-    track_command("config.add")
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "config.add")
     try:
         license_info = get_license()
         if not license_info.is_pro:
-            existing = cfg.list_providers()
+            existing = cfg.list_providers(app_ctx.config_dir)
             if len(existing) >= MAX_FREE_PROVIDERS:
                 console.print(
                     f"[red]Free tier limited to {MAX_FREE_PROVIDERS} providers. "
@@ -92,64 +116,116 @@ def config_add(
                 )
                 raise typer.Exit(1)
 
-        pc = cfg.add_provider(name, provider_type, api_key)
+        pc = cfg.add_provider(name, provider_type, api_key, app_ctx.config_dir)
         # Also register in the store
-        store = cfg.get_store()
         try:
-            store.add_provider(name, provider_type)
+            app_ctx.store.add_provider(name, provider_type)
         except Exception:
             pass  # Already exists in store is fine
-        console.print(f"[green]Added provider '{pc.name}' ({pc.provider_type})[/green]")
+        console.print(
+            f"[green]Added provider '{pc.name}' ({pc.provider_type})[/green]"
+        )
     except ConfigError as e:
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(1) from None
+        _handle_error(e, app_ctx.verbose)
 
 
 @config_app.command("remove")
 def config_remove(
+    ctx: typer.Context,
     name: Annotated[str, typer.Argument(help="Provider name to remove")],
 ) -> None:
     """Remove a provider configuration."""
-    track_command("config.remove")
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "config.remove")
     try:
-        cfg.remove_provider(name)
-        store = cfg.get_store()
+        cfg.remove_provider(name, app_ctx.config_dir)
         try:
-            store.remove_provider(name)
+            app_ctx.store.remove_provider(name)
         except Exception:
             pass
         console.print(f"[green]Removed provider '{name}'[/green]")
     except ConfigError as e:
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(1) from None
+        _handle_error(e, app_ctx.verbose)
 
 
 @config_app.command("list")
-def config_list() -> None:
+def config_list(ctx: typer.Context) -> None:
     """List all configured providers."""
-    track_command("config.list")
-    providers = cfg.list_providers()
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "config.list")
+    providers = cfg.list_providers(app_ctx.config_dir)
     if not providers:
         console.print(
-            "[dim]No providers configured. Use 'ai-spend config add' to add one.[/dim]"
+            "[dim]No providers configured. "
+            "Use 'ai-spend config add' to add one.[/dim]"
         )
         return
     console.print(format_providers_table(providers))
+
+
+@config_app.command("validate")
+def config_validate(ctx: typer.Context) -> None:
+    """Validate API credentials for all configured providers."""
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "config.validate")
+    providers = cfg.list_providers(app_ctx.config_dir)
+    if not providers:
+        console.print("[dim]No providers configured.[/dim]")
+        return
+
+    from ai_spend.providers.registry import get_provider as get_provider_impl
+
+    any_failed = False
+    for pc in providers:
+        if pc.provider_type == ProviderType.MANUAL:
+            console.print(f"[dim]{pc.name}: manual provider (skipped)[/dim]")
+            continue
+        try:
+            provider = get_provider_impl(pc.provider_type, pc.name, pc.api_key)
+            valid = provider.validate_credentials()
+            if valid:
+                console.print(f"[green]{pc.name}: credentials valid[/green]")
+            else:
+                console.print(f"[yellow]{pc.name}: credentials invalid[/yellow]")
+                any_failed = True
+        except (ProviderError, AiSpendError) as e:
+            console.print(f"[red]{pc.name}: {e}[/red]")
+            any_failed = True
+
+    if any_failed:
+        raise typer.Exit(1)
 
 
 # --- Sync ---
 
 
 @app.command()
-def sync() -> None:
+def sync(
+    ctx: typer.Context,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", "-n", help="Preview what would be synced"),
+    ] = False,
+    provider: Annotated[
+        str | None,
+        typer.Option("--provider", "-p", help="Sync only this provider"),
+    ] = None,
+) -> None:
     """Sync usage data from all configured providers."""
-    track_command("sync")
-    providers = cfg.list_providers()
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "sync")
+    providers = cfg.list_providers(app_ctx.config_dir)
     if not providers:
         console.print("[dim]No providers configured.[/dim]")
         return
 
-    store = cfg.get_store()
+    if provider is not None:
+        providers = [p for p in providers if p.name == provider]
+        if not providers:
+            console.print(f"[red]Provider '{provider}' not configured.[/red]")
+            raise typer.Exit(1)
+
+    store = app_ctx.store
     from ai_spend.models import SyncResult
     from ai_spend.providers.registry import get_provider as get_provider_impl
 
@@ -158,12 +234,42 @@ def sync() -> None:
             continue
 
         try:
-            provider = get_provider_impl(pc.provider_type, pc.name, pc.api_key)
+            p = get_provider_impl(pc.provider_type, pc.name, pc.api_key)
             end = date.today()
             start = end - timedelta(days=30)
-            records = provider.fetch_usage(start, end)
-            count = store.add_usage_records(records)
+            logger.info(
+                "sync_start",
+                extra={
+                    "extra_fields": {
+                        "provider": pc.name,
+                        "date_range": f"{start} to {end}",
+                    }
+                },
+            )
+            records = p.fetch_usage(start, end)
 
+            if dry_run:
+                logger.info(
+                    "sync_dry_run",
+                    extra={
+                        "extra_fields": {
+                            "provider": pc.name,
+                            "records": len(records),
+                        }
+                    },
+                )
+                console.print(
+                    f"[cyan]{pc.name}:[/cyan] would sync {len(records)} records"
+                )
+                for r in records[:3]:
+                    console.print(
+                        f"  {r.date} | {r.model} | ${r.cost_usd:.4f}"
+                    )
+                if len(records) > 3:
+                    console.print(f"  ... and {len(records) - 3} more")
+                continue
+
+            count = store.add_usage_records(records)
             result = SyncResult(
                 provider_id=pc.name,
                 status=SyncStatus.SUCCESS,
@@ -171,6 +277,15 @@ def sync() -> None:
                 synced_at=datetime.now(timezone.utc),
             )
             store.log_sync(result)
+            logger.info(
+                "sync_success",
+                extra={
+                    "extra_fields": {
+                        "provider": pc.name,
+                        "records": count,
+                    }
+                },
+            )
             console.print(f"[green]{pc.name}: synced {count} records[/green]")
 
         except (ProviderError, AiSpendError) as e:
@@ -181,6 +296,15 @@ def sync() -> None:
                 synced_at=datetime.now(timezone.utc),
             )
             store.log_sync(result)
+            logger.error(
+                "sync_failure",
+                extra={
+                    "extra_fields": {
+                        "provider": pc.name,
+                        "error": str(e),
+                    }
+                },
+            )
             console.print(f"[red]{pc.name}: {e}[/red]")
 
 
@@ -189,6 +313,7 @@ def sync() -> None:
 
 @app.command()
 def summary(
+    ctx: typer.Context,
     json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
     days: Annotated[
         int,
@@ -196,8 +321,9 @@ def summary(
     ] = 30,
 ) -> None:
     """Show spend summary."""
-    track_command("summary")
-    store = cfg.get_store()
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "summary")
+    store = app_ctx.store
     end = date.today()
     start = end - timedelta(days=days)
     s = store.get_monthly_summary(start, end)
@@ -212,12 +338,16 @@ def summary(
 
 @app.command()
 def daily(
+    ctx: typer.Context,
     last: Annotated[int, typer.Option("--last", "-n", help="Number of days")] = 7,
-    json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Output as JSON")
+    ] = False,
 ) -> None:
     """Show daily spend breakdown."""
-    track_command("daily")
-    store = cfg.get_store()
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "daily")
+    store = app_ctx.store
     end = date.today()
     start = end - timedelta(days=last)
     days = store.get_daily_totals(start, end)
@@ -232,6 +362,7 @@ def daily(
 
 @budget_app.command("set")
 def budget_set(
+    ctx: typer.Context,
     total: Annotated[
         float,
         typer.Option("--total", "-t", help="Budget amount in USD"),
@@ -242,27 +373,28 @@ def budget_set(
     ] = "month",
 ) -> None:
     """Set a spending budget."""
-    track_command("budget.set")
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "budget.set")
     try:
-        store = cfg.get_store()
-        b = set_budget(store, total, period)
+        store = app_ctx.store
+        total_decimal = Decimal(str(total))
+        b = set_budget(store, total_decimal, period)
         console.print(f"[green]Budget set: ${b.total_usd:.2f}/{b.period}[/green]")
     except BudgetError as e:
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(1) from None
+        _handle_error(e, app_ctx.verbose)
 
 
 @budget_app.command("check")
-def budget_check() -> None:
+def budget_check(ctx: typer.Context) -> None:
     """Check current spend against budget."""
-    track_command("budget.check")
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "budget.check")
     try:
-        store = cfg.get_store()
+        store = app_ctx.store
         status = check_budget(store)
         console.print(format_budget_table(status))
     except BudgetError as e:
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(1) from None
+        _handle_error(e, app_ctx.verbose)
 
 
 # --- Export ---
@@ -270,6 +402,7 @@ def budget_check() -> None:
 
 @app.command()
 def export(
+    ctx: typer.Context,
     fmt: Annotated[
         ExportFormat,
         typer.Option("--format", "-f", help="Export format"),
@@ -281,26 +414,84 @@ def export(
     ] = None,
 ) -> None:
     """Export usage records (Pro feature)."""
-    track_command("export")
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "export")
     try:
-        _do_export(fmt, days, output)
+        _do_export(ctx, fmt, days, output)
     except LicenseError as e:
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(1) from None
+        _handle_error(e, app_ctx.verbose)
 
 
 @require_pro("export")
-def _do_export(fmt: ExportFormat, days: int, output: Path | None) -> None:
-    store = cfg.get_store()
+def _do_export(
+    ctx: typer.Context, fmt: ExportFormat, days: int, output: Path | None
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    store = app_ctx.store
     end = date.today()
     start = end - timedelta(days=days)
     records = store.get_usage_by_date_range(start, end)
     result = export_records(records, fmt)
     if output:
         output.write_text(result)
-        console.print(f"[green]Exported {len(records)} records to {output}[/green]")
+        console.print(
+            f"[green]Exported {len(records)} records to {output}[/green]"
+        )
     else:
         console.print(result)
+
+
+@app.command("import")
+def import_cmd(
+    ctx: typer.Context,
+    file: Annotated[Path, typer.Argument(help="File to import")],
+    fmt: Annotated[
+        ExportFormat,
+        typer.Option("--format", "-f", help="Import format"),
+    ] = ExportFormat.JSON,
+) -> None:
+    """Import usage records from a JSON or CSV file."""
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "import")
+    if not file.exists():
+        console.print(f"[red]File not found: {file}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        data = file.read_text()
+        records = import_records(data, fmt)
+        store = app_ctx.store
+        # Atomic import: create missing providers + insert records in one tx
+        with store.transaction() as conn:
+            for pc in records:
+                conn.execute(
+                    "INSERT OR IGNORE INTO providers"
+                    " (name, provider_type) VALUES (?, ?)",
+                    (pc.provider_id, pc.provider_type.value),
+                )
+            conn.executemany(
+                """INSERT OR REPLACE INTO usage_records
+                   (record_id, provider_id, provider_type, date, model,
+                    input_tokens, output_tokens, cost_usd, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (
+                        r.record_id,
+                        r.provider_id,
+                        r.provider_type.value,
+                        r.date.isoformat(),
+                        r.model,
+                        r.input_tokens,
+                        r.output_tokens,
+                        str(r.cost_usd),
+                        json.dumps(r.metadata),
+                    )
+                    for r in records
+                ],
+            )
+        console.print(f"[green]Imported {len(records)} records from {file}[/green]")
+    except (AiSpendError, OSError) as e:
+        _handle_error(e, app_ctx.verbose)
 
 
 # --- Manual ---
@@ -308,6 +499,7 @@ def _do_export(fmt: ExportFormat, days: int, output: Path | None) -> None:
 
 @manual_app.command("add")
 def manual_add(
+    ctx: typer.Context,
     model: Annotated[str, typer.Argument(help="Model or service name")],
     cost: Annotated[float, typer.Argument(help="Cost in USD")],
     entry_date: Annotated[
@@ -321,33 +513,36 @@ def manual_add(
     ] = "manual",
 ) -> None:
     """Add a manual cost entry."""
-    track_command("manual.add")
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "manual.add")
     try:
         d = date.fromisoformat(entry_date) if entry_date else date.today()
     except ValueError:
         console.print("[red]Invalid date format. Use YYYY-MM-DD.[/red]")
         raise typer.Exit(1) from None
 
-    store = cfg.get_store()
+    store = app_ctx.store
     # Ensure manual provider exists
     if store.get_provider(provider_name) is None:
         store.add_provider(provider_name, ProviderType.MANUAL)
 
     mp = ManualProvider(name=provider_name)
-    record = mp.create_entry(model, cost, d, note)
+    cost_decimal = Decimal(str(cost))
+    record = mp.create_entry(model, cost_decimal, d, note)
     store.add_usage_records([record])
-    console.print(f"[green]Added ${cost:.2f} for '{model}' on {d}[/green]")
+    console.print(f"[green]Added ${cost_decimal:.2f} for '{model}' on {d}[/green]")
 
 
 # --- Status ---
 
 
 @app.command()
-def status() -> None:
+def status(ctx: typer.Context) -> None:
     """Show system status and sync history."""
-    track_command("status")
-    store = cfg.get_store()
-    providers = cfg.list_providers()
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "status")
+    store = app_ctx.store
+    providers = cfg.list_providers(app_ctx.config_dir)
     license_info = get_license()
 
     console.print(f"[bold]ai-spend v{ai_spend.__version__}[/bold]")
@@ -357,7 +552,9 @@ def status() -> None:
 
     budget = store.get_budget()
     if budget:
-        console.print(f"Budget: [cyan]${budget.total_usd:.2f}/{budget.period}[/cyan]")
+        console.print(
+            f"Budget: [cyan]${budget.total_usd:.2f}/{budget.period}[/cyan]"
+        )
     else:
         console.print("Budget: [dim]not set[/dim]")
 
@@ -372,24 +569,22 @@ def status() -> None:
 
 @app.command()
 def stats(
-    json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+    ctx: typer.Context,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Output as JSON")
+    ] = False,
 ) -> None:
     """Show local usage telemetry (requires AI_SPEND_TELEMETRY=1)."""
-    from ai_spend.telemetry import TelemetryStore, is_enabled
+    app_ctx: AppContext = ctx.obj
 
-    if not is_enabled():
+    if app_ctx.telemetry is None:
         console.print(
             "[dim]Telemetry is disabled. "
             "Set AI_SPEND_TELEMETRY=1 to enable local usage tracking.[/dim]"
         )
         return
 
-    db_path = cfg.get_config_dir() / "telemetry.db"
-    if not db_path.exists():
-        console.print("[dim]No telemetry data yet.[/dim]")
-        return
-
-    ts = TelemetryStore(db_path)
+    ts = app_ctx.telemetry
     try:
         commands = ts.get_command_counts()
         pro_gates = ts.get_pro_gate_counts()
@@ -412,7 +607,9 @@ def stats(
             console.print(json.dumps(data, indent=2))
         else:
             console.print(
-                format_stats_table(commands, pro_gates, total, first, last, activity)
+                format_stats_table(
+                    commands, pro_gates, total, first, last, activity
+                )
             )
     finally:
         ts.close()

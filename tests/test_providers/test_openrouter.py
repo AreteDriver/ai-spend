@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 import respx
 from httpx import Response
 
 from ai_spend.exceptions import ProviderError
-from ai_spend.models import ProviderType, UsageRecord
+from ai_spend.models import ProviderType
 from ai_spend.providers.openrouter import _BASE_URL, OpenRouterProvider
 
 
@@ -61,9 +63,9 @@ class TestOpenRouterProvider:
         assert records[0].model == "qwen/qwen2.5-coder-14b-instruct"
         assert records[0].input_tokens == 1000
         assert records[0].output_tokens == 500
-        assert records[0].cost_usd == 0.0015
+        assert records[0].cost_usd == Decimal("0.0015")
         assert records[1].model == "anthropic/claude-sonnet-4-20250514"
-        assert records[1].cost_usd == 0.045
+        assert records[1].cost_usd == Decimal("0.045")
         assert route.called
 
     @respx.mock
@@ -97,7 +99,9 @@ class TestOpenRouterProvider:
     @respx.mock
     def test_fetch_usage_connection_error(self, provider: OpenRouterProvider):
         """Connection errors are wrapped in ProviderError."""
-        respx.get(f"{_BASE_URL}/generations").mock(side_effect=__import__("httpx").ConnectError("Connection refused"))
+        respx.get(f"{_BASE_URL}/generations").mock(
+            side_effect=__import__("httpx").ConnectError("Connection refused")
+        )
 
         with pytest.raises(ProviderError) as exc_info:
             provider.fetch_usage(
@@ -124,7 +128,9 @@ class TestOpenRouterProvider:
     @respx.mock
     def test_validate_credentials_connection_error(self, provider: OpenRouterProvider):
         """Connection errors during validation return False."""
-        respx.get(f"{_BASE_URL}/auth/key").mock(side_effect=__import__("httpx").ConnectError("Connection refused"))
+        respx.get(f"{_BASE_URL}/auth/key").mock(
+            side_effect=__import__("httpx").ConnectError("Connection refused")
+        )
         assert provider.validate_credentials() is False
 
     @respx.mock
@@ -154,5 +160,5 @@ class TestOpenRouterProvider:
         )
 
         assert len(records) == 1
-        assert records[0].cost_usd == pytest.approx(15000 * 0.0000015, abs=0.0001)
+        assert records[0].cost_usd == Decimal("15000") * Decimal("0.0000015")
         assert route.called

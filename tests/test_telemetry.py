@@ -8,13 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from ai_spend.exceptions import StoreError
-from ai_spend.telemetry import (
-    TelemetryStore,
-    is_enabled,
-    reset_telemetry_store,
-    track_command,
-    track_pro_gate,
-)
+from ai_spend.telemetry import TelemetryStore, is_enabled
 
 
 @pytest.fixture
@@ -127,50 +121,6 @@ class TestTelemetryStore:
         store.record("command", "sync")
         activity = store.get_daily_activity(last_n_days=1)
         assert len(activity) <= 1
-
-
-class TestTrackHelpers:
-    def test_track_command_disabled(self) -> None:
-        with patch.dict("os.environ", {}, clear=True):
-            reset_telemetry_store()
-            track_command("sync")  # Should not raise
-
-    def test_track_command_enabled(self, tmp_path: Path) -> None:
-        with (
-            patch.dict("os.environ", {"AI_SPEND_TELEMETRY": "1"}),
-            patch("ai_spend.config.get_config_dir", return_value=tmp_path),
-        ):
-            reset_telemetry_store()
-            track_command("sync")
-            # Verify it was recorded
-            store = TelemetryStore(tmp_path / "telemetry.db")
-            try:
-                assert store.get_command_counts() == {"sync": 1}
-            finally:
-                store.close()
-                reset_telemetry_store()
-
-    def test_track_pro_gate_disabled(self) -> None:
-        with patch.dict("os.environ", {}, clear=True):
-            reset_telemetry_store()
-            track_pro_gate("export")  # Should not raise
-
-    def test_track_pro_gate_enabled(self, tmp_path: Path) -> None:
-        with (
-            patch.dict("os.environ", {"AI_SPEND_TELEMETRY": "1"}),
-            patch("ai_spend.config.get_config_dir", return_value=tmp_path),
-        ):
-            reset_telemetry_store()
-            track_pro_gate("export")
-            store = TelemetryStore(tmp_path / "telemetry.db")
-            try:
-                assert store.get_pro_gate_counts() == {"export": 1}
-            finally:
-                store.close()
-                reset_telemetry_store()
-
-    def test_reset_telemetry_store_when_none(self) -> None:
-        reset_telemetry_store()  # Should not raise
 
 
 class TestStoreCreation:

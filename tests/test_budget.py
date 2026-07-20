@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,7 @@ def store(tmp_db_path: Path) -> SpendStore:
 class TestSetBudget:
     def test_set_budget(self, store: SpendStore):
         b = set_budget(store, 100.0)
-        assert b.total_usd == 100.0
+        assert b.total_usd == Decimal("100")
         assert b.period == BucketWidth.MONTH
 
     def test_set_budget_custom_period(self, store: SpendStore):
@@ -67,14 +68,14 @@ class TestCheckBudget:
                     provider_type=ProviderType.ANTHROPIC,
                     date=date.today(),
                     model="claude",
-                    cost_usd=30.0,
+                    cost_usd=Decimal("30"),
                 ),
             ]
         )
         status = check_budget(store)
         assert not status.is_over_budget
-        assert status.spent_usd == 30.0
-        assert status.remaining_usd == 70.0
+        assert status.spent_usd == Decimal("30")
+        assert status.remaining_usd == Decimal("70")
         assert status.exceeded_thresholds == []
 
     def test_over_budget(self, store: SpendStore):
@@ -87,13 +88,13 @@ class TestCheckBudget:
                     provider_type=ProviderType.ANTHROPIC,
                     date=date.today(),
                     model="claude",
-                    cost_usd=110.0,
+                    cost_usd=Decimal("110"),
                 ),
             ]
         )
         status = check_budget(store)
         assert status.is_over_budget
-        assert status.remaining_usd == -10.0
+        assert status.remaining_usd == Decimal("-10")
         assert 1.0 in status.exceeded_thresholds
 
     def test_threshold_80_percent(self, store: SpendStore):
@@ -106,7 +107,7 @@ class TestCheckBudget:
                     provider_type=ProviderType.ANTHROPIC,
                     date=date.today(),
                     model="claude",
-                    cost_usd=85.0,
+                    cost_usd=Decimal("85"),
                 ),
             ]
         )
@@ -117,6 +118,6 @@ class TestCheckBudget:
     def test_zero_spend(self, store: SpendStore):
         set_budget(store, 100.0)
         status = check_budget(store)
-        assert status.spent_usd == 0.0
+        assert status.spent_usd == Decimal("0")
         assert status.utilization == 0.0
         assert not status.is_over_budget

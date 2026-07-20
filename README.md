@@ -7,7 +7,7 @@
 
 **`htop` for AI spend.** Local-first, cross-provider, terminal-native. No proxies. No dashboards. No SDK changes.
 
-`ai-spend` aggregates usage data from **Anthropic and OpenAI** (with OpenRouter coming soon) directly into your terminal. Your API keys stay local. Your prompts are never seen. Your data never leaves your machine.
+`ai-spend` aggregates usage data from **Anthropic, OpenAI, and OpenRouter** directly into your terminal. Your API keys stay local. Your prompts are never seen. Your data never leaves your machine.
 
 ```
 $ ai-spend summary
@@ -16,20 +16,13 @@ $ ai-spend summary
   ─────────────────────────────────────────
   Anthropic        $47.23       +12%
   OpenAI           $31.88        -4%
+  OpenRouter        $5.12       +22%
   ─────────────────────────────────────────
-  Total            $79.11
+  Total            $84.23
 
   Top models:
   claude-opus-4-6       $31.44   (67% of Anthropic)
   gpt-4.1               $18.22   (57% of OpenAI)
-
-$ ai-spend daily --last 7
-
-  Date         Anthropic    OpenAI    Total
-  ──────────────────────────────────────────
-  2026-02-28     $8.12      $4.33    $12.45
-  2026-02-27     $6.88      $5.11    $11.99
-  ...
 ```
 
 ## Why ai-spend?
@@ -57,13 +50,22 @@ pip install ai-spend
 ## Quick Start
 
 ```bash
-# Add your providers (keys stored locally with 0600 perms)
+# Add your providers (keys stored locally with 0700 perms)
 ai-spend config add anthropic
 ai-spend config add openai
-# ai-spend config add openrouter  # Coming soon
+ai-spend config add openrouter
+
+# Validate credentials before syncing
+ai-spend config validate
 
 # Pull latest usage data
 ai-spend sync
+
+# Preview what would be synced (dry run)
+ai-spend sync --dry-run
+
+# Sync only one provider
+ai-spend sync --provider openai
 
 # See your spend
 ai-spend summary
@@ -74,12 +76,15 @@ ai-spend daily --last 30
 
 ```bash
 # Provider management
-ai-spend config add <provider>     # Add a provider (anthropic, openai)
+ai-spend config add <provider>       # Add a provider (anthropic, openai, openrouter, manual)
 ai-spend config remove <provider>  # Remove a provider
 ai-spend config list               # List configured providers
+ai-spend config validate           # Check API keys without syncing
 
 # Sync usage data from provider APIs
 ai-spend sync
+ai-spend sync --dry-run            # Preview only
+ai-spend sync --provider <name>    # Sync a single provider
 
 # View spend
 ai-spend summary                   # Aggregated totals
@@ -98,8 +103,13 @@ ai-spend manual add 12.50 --provider ollama --note "local GPU costs"
 ai-spend export --format csv
 ai-spend export --format json
 
+# Import (round-trip your data)
+ai-spend import records.json --format json
+ai-spend import records.csv --format csv
+
 # Status
 ai-spend status                    # License tier + system info
+ai-spend stats                     # Telemetry (set AI_SPEND_TELEMETRY=1)
 ```
 
 ## How It Works
@@ -108,15 +118,24 @@ ai-spend status                    # License tier + system info
 Provider APIs ──→ ai-spend sync ──→ Local SQLite
 (Anthropic)                         (~/.ai-spend/spend.db)
 (OpenAI)                                  │
-                                          ▼
+(OpenRouter)                              ▼
                               ai-spend summary/daily/budget
 ```
 
-1. **Configure** — Add provider API keys (stored locally in `~/.ai-spend/config.yaml` with `0600` permissions)
-2. **Sync** — Pulls usage records from official billing APIs into a local SQLite database
+1. **Configure** — Add provider API keys (stored locally in `~/.ai-spend/config.yaml` with `0700` permissions)
+2. **Sync** — Pulls usage records from official billing APIs into a local SQLite database (WAL mode, schema migrations)
 3. **Query** — All read commands (`summary`, `daily`, `budget`, `export`) hit the local database only
 
 No background processes. No network calls except during `sync`. Run it in a cron job, pipe it into monitoring, or check it before standups.
+
+## Structured Logging
+
+Set `AI_SPEND_VERBOSE=1` or pass `--verbose` to see structured JSON logs for every sync operation:
+
+```bash
+ai-spend sync --verbose
+# {"ts": "...", "level": "info", "msg": "sync_start", "fields": {"provider": "..."}}
+```
 
 ## Free vs Pro
 

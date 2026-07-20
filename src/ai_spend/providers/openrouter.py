@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from decimal import Decimal
 
 import httpx
 
 from ai_spend.exceptions import ProviderError
 from ai_spend.models import ProviderType, UsageRecord
-from ai_spend.providers.base import BaseProvider
+from ai_spend.providers.base import BaseProvider, _make_request
 from ai_spend.providers.registry import register_provider
 
 _BASE_URL = "https://openrouter.ai/api/v1"
@@ -26,7 +27,9 @@ class OpenRouterProvider(BaseProvider):
         records: list[UsageRecord] = []
         cursor: str | None = None
         start_ts = int(
-            datetime.combine(start, datetime.min.time(), tzinfo=timezone.utc).timestamp()
+            datetime.combine(
+                start, datetime.min.time(), tzinfo=timezone.utc
+            ).timestamp()
         )
         end_ts = int(
             datetime.combine(end, datetime.max.time(), tzinfo=timezone.utc).timestamp()
@@ -43,7 +46,9 @@ class OpenRouterProvider(BaseProvider):
                     if cursor:
                         params["cursor"] = cursor
 
-                    resp = client.get(
+                    resp = _make_request(
+                        client,
+                        "GET",
                         f"{_BASE_URL}/generations",
                         headers={
                             "Authorization": f"Bearer {self.api_key}",
@@ -52,7 +57,6 @@ class OpenRouterProvider(BaseProvider):
                         },
                         params=params,
                     )
-                    resp.raise_for_status()
                     data = resp.json()
 
                     for gen in data.get("data", []):
@@ -66,14 +70,15 @@ class OpenRouterProvider(BaseProvider):
 
                         model_name = gen.get("model", "unknown")
                         # OpenRouter returns native_cost in USD
-                        cost = float(gen.get("native_cost", 0.0))
+                        raw_cost = gen.get("native_cost", 0.0)
+                        cost = Decimal(str(raw_cost))
                         # Fallback to tokens if cost not available
-                        if cost == 0.0:
+                        if cost == Decimal("0"):
                             total_tokens = gen.get("native_tokens_prompt", 0) + gen.get(
                                 "native_tokens_completion", 0
                             )
                             # Rough estimate: ~$0.0015 per 1K tokens average
-                            cost = total_tokens * 0.0000015
+                            cost = Decimal(str(total_tokens)) * Decimal("0.0000015")
 
                         input_tokens = gen.get("native_tokens_prompt", 0)
                         output_tokens = gen.get("native_tokens_completion", 0)
@@ -109,12 +114,15 @@ class OpenRouterProvider(BaseProvider):
         """Validate OpenRouter API key."""
         try:
             with httpx.Client(timeout=10.0) as client:
-                resp = client.get(
+                resp = _make_request(
+                    client,
+                    "GET",
                     f"{_BASE_URL}/auth/key",
                     headers={
                         "Authorization": f"Bearer {self.api_key}",
                         "HTTP-Referer": "https://github.com/AreteDriver/ai-spend",
                     },
+                    max_attempts=1,  # No retry for simple credential check
                 )
                 return resp.status_code == 200
         except httpx.HTTPError:

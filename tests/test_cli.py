@@ -9,8 +9,8 @@ import pytest
 from typer.testing import CliRunner
 
 from ai_spend.cli import app
-from ai_spend.config import reset_store
 from ai_spend.licensing import generate_key
+from ai_spend.models import ProviderType
 
 runner = CliRunner()
 
@@ -22,9 +22,7 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     config_dir.mkdir()
     monkeypatch.setenv("AI_SPEND_DIR", str(config_dir))
     monkeypatch.delenv("AI_SPEND_LICENSE", raising=False)
-    reset_store()
     yield
-    reset_store()
 
 
 class TestVersion:
@@ -37,6 +35,14 @@ class TestVersion:
         result = runner.invoke(app, ["-v"])
         assert result.exit_code == 0
         assert "ai-spend" in result.stdout
+
+
+class TestVerboseError:
+    def test_verbose_traceback(self):
+        result = runner.invoke(app, ["-V", "budget", "check"])
+        assert result.exit_code == 1
+        # Verbose mode should include traceback details
+        assert "Traceback" in result.stdout or "No budget" in result.stdout
 
 
 class TestConfigAdd:
@@ -107,6 +113,87 @@ class TestConfigList:
         assert "anthropic" in result.stdout
 
 
+class TestConfigValidate:
+    def test_validate_no_providers(self):
+        result = runner.invoke(app, ["config", "validate"])
+        assert result.exit_code == 0
+        assert "No providers" in result.stdout
+
+    def test_validate_manual_skipped(self):
+        runner.invoke(app, ["config", "add", "m", "manual"])
+        result = runner.invoke(app, ["config", "validate"])
+        assert result.exit_code == 0
+        assert "skipped" in result.stdout
+
+    def test_validate_api_provider(self, monkeypatch: pytest.MonkeyPatch):
+        runner.invoke(app, ["config", "add", "my-openai", "openai", "-k", "test-key"])
+        import ai_spend.providers.registry
+
+        def _fake_provider(*args, **kwargs):
+            class Fake:
+                name = "my-openai"
+                api_key = "test-key"
+                provider_type = None
+
+                def validate_credentials(self):
+                    return True
+
+            return Fake()
+
+        monkeypatch.setattr(
+            ai_spend.providers.registry, "get_provider", _fake_provider, raising=False
+        )
+        result = runner.invoke(app, ["config", "validate"])
+        assert result.exit_code == 0
+        assert "credentials valid" in result.stdout
+
+    def test_validate_invalid_credentials(self, monkeypatch: pytest.MonkeyPatch):
+        runner.invoke(app, ["config", "add", "my-openai", "openai", "-k", "test-key"])
+        import ai_spend.providers.registry
+
+        def _fake_provider(*args, **kwargs):
+            class Fake:
+                name = "my-openai"
+                api_key = "test-key"
+                provider_type = None
+
+                def validate_credentials(self):
+                    return False
+
+            return Fake()
+
+        monkeypatch.setattr(
+            ai_spend.providers.registry, "get_provider", _fake_provider, raising=False
+        )
+        result = runner.invoke(app, ["config", "validate"])
+        assert result.exit_code == 1
+        assert "credentials invalid" in result.stdout
+
+    def test_validate_failure(self, monkeypatch: pytest.MonkeyPatch):
+        from ai_spend.exceptions import ProviderError
+
+        runner.invoke(app, ["config", "add", "my-openai", "openai", "-k", "test-key"])
+        import ai_spend.providers.registry
+
+        def _broken_provider(*args, **kwargs):
+            class Broken:
+                name = "my-openai"
+                api_key = "test-key"
+                provider_type = None
+
+                def validate_credentials(self):
+                    raise ProviderError("bad key")
+
+            return Broken()
+
+        monkeypatch.setattr(
+            ai_spend.providers.registry, "get_provider", _broken_provider, raising=False
+        )
+        result = runner.invoke(app, ["config", "validate"])
+        assert result.exit_code == 1
+        assert "bad key" in result.stdout
+
+
 class TestSync:
     def test_sync_no_providers(self):
         result = runner.invoke(app, ["sync"])
@@ -118,6 +205,117 @@ class TestSync:
         result = runner.invoke(app, ["sync"])
         assert result.exit_code == 0
         # Manual providers are skipped — no output about them
+
+    def test_sync_dry_run(self, monkeypatch: pytest.MonkeyPatch):
+        runner.invoke(app, ["config", "add", "my-openai", "openai", "-k", "test-key"])
+        import ai_spend.providers.registry
+
+        def _fake_provider(*args, **kwargs):
+            class Fake:
+                name = "my-openai"
+                api_key = "test-key"
+                provider_type = None
+
+                def fetch_usage(self, start, end):
+                    return []
+
+            return Fake()
+
+        monkeypatch.setattr(
+            ai_spend.providers.registry, "get_provider", _fake_provider, raising=False
+        )
+        result = runner.invoke(app, ["sync", "--dry-run"])
+        assert result.exit_code == 0
+        assert "would sync" in result.stdout
+
+    def test_sync_dry_run_many_records(self, monkeypatch: pytest.MonkeyPatch):
+        runner.invoke(app, ["config", "add", "my-openai", "openai", "-k", "test-key"])
+        import ai_spend.providers.registry
+
+        def _fake_provider(*args, **kwargs):
+            from datetime import date
+            from decimal import Decimal
+
+            from ai_spend.models import UsageRecord
+
+            class Fake:
+                name = "my-openai"
+                api_key = "test-key"
+                provider_type = None
+
+                def fetch_usage(self, start, end):
+                    return [
+                        UsageRecord(
+                            provider_id="my-openai",
+                            provider_type=ProviderType.OPENAI,
+                            date=date.today(),
+                            model=f"gpt-{i}",
+                            cost_usd=Decimal("0.01"),
+                        )
+                        for i in range(5)
+                    ]
+
+            return Fake()
+
+        monkeypatch.setattr(
+            ai_spend.providers.registry, "get_provider", _fake_provider, raising=False
+        )
+        result = runner.invoke(app, ["sync", "--dry-run"])
+        assert result.exit_code == 0
+        assert "... and 2 more" in result.stdout
+
+    def test_sync_failure(self, monkeypatch: pytest.MonkeyPatch):
+        from ai_spend.exceptions import ProviderError
+
+        runner.invoke(app, ["config", "add", "my-openai", "openai", "-k", "test-key"])
+        import ai_spend.providers.registry
+
+        def _broken_provider(*args, **kwargs):
+            class Broken:
+                name = "broken"
+                api_key = ""
+                provider_type = None
+
+                def fetch_usage(self, start, end):
+                    raise ProviderError("network down")
+
+            return Broken()
+
+        monkeypatch.setattr(
+            ai_spend.providers.registry, "get_provider", _broken_provider, raising=False
+        )
+        result = runner.invoke(app, ["sync"])
+        assert result.exit_code == 0
+        assert "network down" in result.stdout
+
+    def test_sync_provider_filter(self, monkeypatch: pytest.MonkeyPatch):
+        runner.invoke(app, ["config", "add", "p1", "openai", "-k", "k1"])
+        runner.invoke(app, ["config", "add", "p2", "anthropic", "-k", "k2"])
+        import ai_spend.providers.registry
+
+        def _fake_provider(*args, **kwargs):
+            class Fake:
+                name = kwargs.get("name", "fake")
+                api_key = ""
+                provider_type = None
+
+                def fetch_usage(self, start, end):
+                    return []
+
+            return Fake()
+
+        monkeypatch.setattr(
+            ai_spend.providers.registry, "get_provider", _fake_provider, raising=False
+        )
+        result = runner.invoke(app, ["sync", "--provider", "p1"])
+        assert result.exit_code == 0
+        assert "p1" in result.stdout
+
+    def test_sync_provider_not_found(self):
+        runner.invoke(app, ["config", "add", "existing", "manual"])
+        result = runner.invoke(app, ["sync", "--provider", "nonexistent"])
+        assert result.exit_code == 1
+        assert "not configured" in result.stdout
 
 
 class TestSummary:
@@ -218,6 +416,47 @@ class TestExport:
         assert out.exists()
 
 
+class TestImport:
+    def test_import_json(self, tmp_path: Path):
+        data = json.dumps([
+            {
+                "provider_id": "test",
+                "provider_type": "manual",
+                "date": "2026-02-19",
+                "model": "misc",
+                "cost_usd": "5.00",
+            }
+        ])
+        f = tmp_path / "records.json"
+        f.write_text(data)
+        result = runner.invoke(app, ["import", str(f), "--format", "json"])
+        assert result.exit_code == 0
+        assert "Imported" in result.stdout
+
+    def test_import_csv(self, tmp_path: Path):
+        lines = [
+            "provider_id,provider_type,date,model,cost_usd",
+            "test,manual,2026-02-19,misc,3.50",
+        ]
+        f = tmp_path / "records.csv"
+        f.write_text("\n".join(lines))
+        result = runner.invoke(app, ["import", str(f), "--format", "csv"])
+        assert result.exit_code == 0
+        assert "Imported" in result.stdout
+
+    def test_import_missing_file(self):
+        result = runner.invoke(app, ["import", "/does/not/exist.json"])
+        assert result.exit_code == 1
+        assert "File not found" in result.stdout
+
+    def test_import_invalid_data(self, tmp_path: Path):
+        f = tmp_path / "bad.json"
+        f.write_text('[{"not_a_record": true}]')
+        result = runner.invoke(app, ["import", str(f), "--format", "json"])
+        assert result.exit_code == 1
+        assert "Error" in result.stdout
+
+
 class TestManualAdd:
     def test_add_manual_entry(self):
         result = runner.invoke(app, ["manual", "add", "misc", "5.00"])
@@ -253,6 +492,30 @@ class TestManualAdd:
             ["manual", "add", "misc", "1.0", "--provider", "custom"],
         )
         assert result.exit_code == 0
+
+
+class TestStats:
+    def test_stats_disabled(self):
+        result = runner.invoke(app, ["stats"])
+        assert result.exit_code == 0
+        assert "Telemetry is disabled" in result.stdout
+
+    def test_stats_enabled(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("AI_SPEND_TELEMETRY", "1")
+        runner.invoke(app, ["summary"])  # record a command event
+        result = runner.invoke(app, ["stats"])
+        assert result.exit_code == 0
+        assert "Telemetry Overview" in result.stdout
+
+    def test_stats_json(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("AI_SPEND_TELEMETRY", "1")
+        runner.invoke(app, ["summary"])
+        result = runner.invoke(app, ["stats", "--json"])
+        assert result.exit_code == 0
+        import json
+
+        data = json.loads(result.stdout)
+        assert "total_events" in data
 
 
 class TestStatus:

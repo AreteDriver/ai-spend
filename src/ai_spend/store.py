@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from ai_spend.exceptions import StoreError
@@ -19,47 +22,48 @@ from ai_spend.models import (
     UsageRecord,
 )
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS providers (
-    name TEXT PRIMARY KEY,
-    provider_type TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
+_MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
-CREATE TABLE IF NOT EXISTS usage_records (
-    record_id TEXT PRIMARY KEY,
-    provider_id TEXT NOT NULL,
-    provider_type TEXT NOT NULL,
-    date TEXT NOT NULL,
-    model TEXT NOT NULL,
-    input_tokens INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd REAL NOT NULL DEFAULT 0.0,
-    metadata TEXT NOT NULL DEFAULT '{}',
-    FOREIGN KEY (provider_id) REFERENCES providers(name)
-);
 
-CREATE INDEX IF NOT EXISTS idx_usage_date ON usage_records(date);
-CREATE INDEX IF NOT EXISTS idx_usage_provider ON usage_records(provider_id);
-CREATE INDEX IF NOT EXISTS idx_usage_date_provider ON usage_records(date, provider_id);
+def _get_migration_files() -> list[tuple[int, Path]]:
+    """Discover migration files, returning sorted (version, path) tuples."""
+    if not _MIGRATIONS_DIR.exists():
+        return []
+    files: list[tuple[int, Path]] = []
+    for path in _MIGRATIONS_DIR.iterdir():
+        if path.suffix == ".sql" and path.stem[:3].isdigit():
+            version = int(path.stem[:3])
+            files.append((version, path))
+    files.sort(key=lambda x: x[0])
+    return files
 
-CREATE TABLE IF NOT EXISTS budgets (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    total_usd REAL NOT NULL,
-    period TEXT NOT NULL DEFAULT 'month',
-    alert_thresholds TEXT NOT NULL DEFAULT '[0.8, 0.9, 1.0]'
-);
 
-CREATE TABLE IF NOT EXISTS sync_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    provider_id TEXT NOT NULL,
-    status TEXT NOT NULL,
-    records_synced INTEGER NOT NULL DEFAULT 0,
-    error_message TEXT NOT NULL DEFAULT '',
-    synced_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (provider_id) REFERENCES providers(name)
-);
-"""
+def _get_current_version(conn: sqlite3.Connection) -> int:
+    """Get the current schema version from the database."""
+    try:
+        row = conn.execute(
+            "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
+        ).fetchone()
+        return row["version"] if row else 0
+    except sqlite3.OperationalError:
+        # schema_version table doesn't exist yet
+        return 0
+
+
+def _apply_migration(conn: sqlite3.Connection, version: int, sql: str) -> None:
+    """Apply a single migration script within a transaction."""
+    conn.execute("BEGIN")
+    try:
+        conn.executescript(sql)
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version"
+            " (version, applied_at) VALUES (?, datetime('now'))",
+            (version,),
+        )
+        conn.execute("COMMIT")
+    except sqlite3.Error:
+        conn.execute("ROLLBACK")
+        raise
 
 
 class SpendStore:
@@ -73,13 +77,42 @@ class SpendStore:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.row_factory = sqlite3.Row
-            self._conn.executescript(_SCHEMA)
+            self._run_migrations()
         except sqlite3.Error as e:
             raise StoreError(f"Failed to initialize database: {e}") from e
+
+    def _run_migrations(self) -> None:
+        """Run any pending schema migrations."""
+        current = _get_current_version(self._conn)
+        migrations = _get_migration_files()
+        for version, path in migrations:
+            if version <= current:
+                continue
+            sql = path.read_text()
+            try:
+                _apply_migration(self._conn, version, sql)
+            except sqlite3.Error as e:
+                raise StoreError(
+                    f"Migration {version:03d} ({path.name}) failed: {e}"
+                ) from e
 
     def close(self) -> None:
         """Close the database connection."""
         self._conn.close()
+
+    @contextmanager
+    def transaction(self) -> Generator[sqlite3.Connection, None, None]:
+        """Run a block of SQL inside a transaction.
+
+        Commits on success, rolls back on any exception.
+        """
+        try:
+            self._conn.execute("BEGIN")
+            yield self._conn
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
 
     # --- Provider CRUD ---
 
@@ -140,7 +173,7 @@ class SpendStore:
                         r.model,
                         r.input_tokens,
                         r.output_tokens,
-                        r.cost_usd,
+                        str(r.cost_usd),
                         json.dumps(r.metadata),
                     )
                     for r in records
@@ -180,28 +213,19 @@ class SpendStore:
         end: date,
     ) -> list[DailySpend]:
         """Get daily spend totals in a date range."""
-        rows = self._conn.execute(
-            """SELECT date, SUM(cost_usd) as total, COUNT(*) as cnt,
-                      provider_id, model
-               FROM usage_records
-               WHERE date >= ? AND date <= ?
-               GROUP BY date, provider_id, model
-               ORDER BY date""",
-            (start.isoformat(), end.isoformat()),
-        ).fetchall()
-
+        records = self.get_usage_by_date_range(start, end)
         days: dict[str, DailySpend] = {}
-        for r in rows:
-            d = r["date"]
+        for r in records:
+            d = r.date.isoformat()
             if d not in days:
-                days[d] = DailySpend(date=date.fromisoformat(d))
+                days[d] = DailySpend(date=r.date)
             ds = days[d]
-            ds.total_usd += r["total"]
-            ds.record_count += r["cnt"]
-            prov = r["provider_id"]
-            ds.by_provider[prov] = ds.by_provider.get(prov, 0.0) + r["total"]
-            model = r["model"]
-            ds.by_model[model] = ds.by_model.get(model, 0.0) + r["total"]
+            ds.total_usd += r.cost_usd
+            ds.record_count += 1
+            prov = r.provider_id
+            ds.by_provider[prov] = ds.by_provider.get(prov, Decimal("0")) + r.cost_usd
+            model = r.model
+            ds.by_model[model] = ds.by_model.get(model, Decimal("0")) + r.cost_usd
 
         return list(days.values())
 
@@ -217,15 +241,11 @@ class SpendStore:
             summary.total_usd += r.cost_usd
             summary.record_count += 1
             summary.by_provider[r.provider_id] = (
-                summary.by_provider.get(r.provider_id, 0.0) + r.cost_usd
+                summary.by_provider.get(r.provider_id, Decimal("0")) + r.cost_usd
             )
-            summary.by_model[r.model] = summary.by_model.get(r.model, 0.0) + r.cost_usd
-        # Round to avoid float drift
-        summary.total_usd = round(summary.total_usd, 6)
-        for k in summary.by_provider:
-            summary.by_provider[k] = round(summary.by_provider[k], 6)
-        for k in summary.by_model:
-            summary.by_model[k] = round(summary.by_model[k], 6)
+            summary.by_model[r.model] = (
+                summary.by_model.get(r.model, Decimal("0")) + r.cost_usd
+            )
         return summary
 
     # --- Budget ---
@@ -236,7 +256,7 @@ class SpendStore:
             """INSERT OR REPLACE INTO budgets (id, total_usd, period, alert_thresholds)
                VALUES (1, ?, ?, ?)""",
             (
-                budget.total_usd,
+                str(budget.total_usd),
                 budget.period.value,
                 json.dumps(budget.alert_thresholds),
             ),
@@ -249,7 +269,7 @@ class SpendStore:
         if row is None:
             return None
         return BudgetConfig(
-            total_usd=row["total_usd"],
+            total_usd=Decimal(row["total_usd"]),
             period=BucketWidth(row["period"]),
             alert_thresholds=json.loads(row["alert_thresholds"]),
         )
@@ -308,7 +328,7 @@ class SpendStore:
 
     # --- Utilities ---
 
-    def get_total_spend_current_period(self, period: BucketWidth) -> float:
+    def get_total_spend_current_period(self, period: BucketWidth) -> Decimal:
         """Get total spend for the current period (month/week/day)."""
         now = date.today()
         if period == BucketWidth.MONTH:
@@ -317,17 +337,13 @@ class SpendStore:
             start = date.fromordinal(now.toordinal() - now.weekday())
         else:
             start = now
-        row = self._conn.execute(
-            "SELECT COALESCE(SUM(cost_usd), 0.0) as total"
-            " FROM usage_records WHERE date >= ?",
-            (start.isoformat(),),
-        ).fetchone()
-        return row["total"] if row else 0.0
+        records = self.get_usage_by_date_range(start, now)
+        return sum((r.cost_usd for r in records), Decimal("0"))
 
     def get_record_count(self) -> int:
         """Get total number of usage records."""
         row = self._conn.execute("SELECT COUNT(*) as cnt FROM usage_records").fetchone()
-        return row["cnt"]
+        return int(row["cnt"])
 
     def reset(self) -> None:
         """Delete all data (for testing)."""
@@ -349,6 +365,6 @@ class SpendStore:
             model=row["model"],
             input_tokens=row["input_tokens"],
             output_tokens=row["output_tokens"],
-            cost_usd=row["cost_usd"],
+            cost_usd=Decimal(row["cost_usd"]),
             metadata=json.loads(row["metadata"]),
         )
