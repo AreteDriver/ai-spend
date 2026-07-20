@@ -348,6 +348,39 @@ class TestSync:
         assert result.exit_code == 1
         assert "not configured" in result.stdout
 
+    def test_sync_since(self, monkeypatch: pytest.MonkeyPatch):
+        runner.invoke(app, ["config", "add", "my-openai", "openai", "-k", "test-key"])
+        import ai_spend.providers.registry
+
+        captured_start = None
+
+        def _fake_provider(*args, **kwargs):
+            class Fake:
+                name = "my-openai"
+                api_key = "test-key"
+                provider_type = None
+
+                def fetch_usage(self, start, end):
+                    nonlocal captured_start
+                    captured_start = start
+                    return []
+
+            return Fake()
+
+        monkeypatch.setattr(
+            ai_spend.providers.registry, "get_provider", _fake_provider, raising=False
+        )
+        result = runner.invoke(app, ["sync", "--since", "2026-01-01"])
+        assert result.exit_code == 0
+        assert captured_start is not None
+        assert captured_start.isoformat() == "2026-01-01"
+
+    def test_sync_since_invalid(self):
+        runner.invoke(app, ["config", "add", "existing", "manual"])
+        result = runner.invoke(app, ["sync", "--since", "not-a-date"])
+        assert result.exit_code == 1
+        assert "Invalid --since" in result.stdout
+
 
 class TestSummary:
     def test_empty_summary(self):

@@ -7,11 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `ai-spend sync --since YYYY-MM-DD` / `-s`: custom start date for sync window.
+- SQLite backup before migrations: `spend.db` copied to timestamped backup before any schema migration runs.
+
 ## [0.3.0] - 2026-07-19
 
 ### Added
 - `ai-spend sync --dry-run` / `-n`: preview records without writing to database.
 - `ai-spend sync --provider` / `-p <name>`: sync a single provider.
+- `ai-spend sync --since YYYY-MM-DD` / `-s`: custom start date for sync window (default 30 days).
 - `ai-spend config validate`: test API credentials without syncing data.
 - `ai-spend config edit <name> --key <new-key>`: rotate API keys in-place.
 - `ai-spend import <file> --format {json,csv}`: round-trip import with atomic transaction.

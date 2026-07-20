@@ -50,6 +50,16 @@ def _get_current_version(conn: sqlite3.Connection) -> int:
         return 0
 
 
+def _backup_db(db_path: Path) -> Path:
+    """Copy the database to a timestamped backup before migrations."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = db_path.parent / f"{db_path.name}.backup.{timestamp}"
+    import shutil
+
+    shutil.copy2(db_path, backup_path)
+    return backup_path
+
+
 def _apply_migration(conn: sqlite3.Connection, version: int, sql: str) -> None:
     """Apply a single migration script within a transaction."""
     conn.execute("BEGIN")
@@ -85,9 +95,10 @@ class SpendStore:
         """Run any pending schema migrations."""
         current = _get_current_version(self._conn)
         migrations = _get_migration_files()
-        for version, path in migrations:
-            if version <= current:
-                continue
+        pending = [(v, p) for v, p in migrations if v > current]
+        if pending and self._db_path.exists():
+            _backup_db(self._db_path)
+        for version, path in pending:
             sql = path.read_text()
             try:
                 _apply_migration(self._conn, version, sql)

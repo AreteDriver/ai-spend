@@ -251,6 +251,10 @@ def sync(
         str | None,
         typer.Option("--provider", "-p", help="Sync only this provider"),
     ] = None,
+    since: Annotated[
+        str | None,
+        typer.Option("--since", "-s", help="Sync from date (YYYY-MM-DD)"),
+    ] = None,
 ) -> None:
     """Sync usage data from all configured providers."""
     app_ctx: AppContext = ctx.obj
@@ -266,6 +270,16 @@ def sync(
             console.print(f"[red]Provider '{provider}' not configured.[/red]")
             raise typer.Exit(1)
 
+    end = date.today()
+    if since is not None:
+        try:
+            start = date.fromisoformat(since)
+        except ValueError:
+            console.print("[red]Invalid --since date. Use YYYY-MM-DD.[/red]")
+            raise typer.Exit(1) from None
+    else:
+        start = end - timedelta(days=30)
+
     store = app_ctx.store
     from ai_spend.models import SyncResult
     from ai_spend.providers.registry import get_provider as get_provider_impl
@@ -276,8 +290,6 @@ def sync(
 
         try:
             p = get_provider_impl(pc.provider_type, pc.name, pc.api_key)
-            end = date.today()
-            start = end - timedelta(days=30)
             logger.info(
                 "sync_start",
                 extra={
