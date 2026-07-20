@@ -266,8 +266,6 @@ class TestImportRecords:
             )
 
 
-
-
 class TestFormatStatsTable:
     def test_basic(self):
         output = format_stats_table(

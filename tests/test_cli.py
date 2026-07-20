@@ -104,17 +104,13 @@ class TestConfigRemove:
 class TestConfigEdit:
     def test_edit_api_key(self):
         runner.invoke(app, ["config", "add", "x", "manual", "-k", "old-key"])
-        result = runner.invoke(
-            app, ["config", "edit", "x", "--key", "new-key"]
-        )
+        result = runner.invoke(app, ["config", "edit", "x", "--key", "new-key"])
         assert result.exit_code == 0
         assert "Updated" in result.stdout
 
     def test_edit_type(self):
         runner.invoke(app, ["config", "add", "x", "manual"])
-        result = runner.invoke(
-            app, ["config", "edit", "x", "--type", "anthropic"]
-        )
+        result = runner.invoke(app, ["config", "edit", "x", "--type", "anthropic"])
         assert result.exit_code == 0
         assert "anthropic" in result.stdout
 
@@ -125,16 +121,12 @@ class TestConfigEdit:
         assert "No changes" in result.stdout
 
     def test_edit_missing(self):
-        result = runner.invoke(
-            app, ["config", "edit", "nonexistent", "--key", "k"]
-        )
+        result = runner.invoke(app, ["config", "edit", "nonexistent", "--key", "k"])
         assert result.exit_code == 1
         assert "not found" in result.stdout
 
     def test_config_encrypt(self):
-        runner.invoke(
-            app, ["config", "add", "x", "openai", "--key", "secret123"]
-        )
+        runner.invoke(app, ["config", "add", "x", "openai", "--key", "secret123"])
         result = runner.invoke(app, ["config", "encrypt"])
         assert result.exit_code == 0
         assert "encrypted" in result.stdout.lower()
@@ -527,15 +519,17 @@ class TestPrune:
 
 class TestImport:
     def test_import_json(self, tmp_path: Path):
-        data = json.dumps([
-            {
-                "provider_id": "test",
-                "provider_type": "manual",
-                "date": "2026-02-19",
-                "model": "misc",
-                "cost_usd": "5.00",
-            }
-        ])
+        data = json.dumps(
+            [
+                {
+                    "provider_id": "test",
+                    "provider_type": "manual",
+                    "date": "2026-02-19",
+                    "model": "misc",
+                    "cost_usd": "5.00",
+                }
+            ]
+        )
         f = tmp_path / "records.json"
         f.write_text(data)
         result = runner.invoke(app, ["import", str(f), "--format", "json"])
@@ -782,9 +776,11 @@ class TestHealth:
 
             def execute(self, sql, *args):
                 if "integrity_check" in sql.lower():
+
                     class FakeRow:
                         def __getitem__(self, _):
                             return "corrupt"
+
                     return FakeCursor([FakeRow()])
                 return self._real.execute(sql, *args)
 
@@ -826,6 +822,7 @@ class TestHealth:
             def stat(self, *args, **kwargs):
                 class FakeStat:
                     st_mode = 0o40755
+
                 return FakeStat()
 
         fake_dir = WrongPermsDir(config_dir)
@@ -858,6 +855,7 @@ class TestHealth:
             def stat(self, *args, **kwargs):
                 class FakeStat:
                     st_mode = 0o100644
+
                 return FakeStat()
 
         class WrongFilePermsDir:
@@ -890,4 +888,3 @@ class TestHealth:
         assert result.exit_code == 0
         assert "Config file permissions" in result.stdout
         assert "Some checks raised warnings" in result.stdout
-

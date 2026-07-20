@@ -95,23 +95,17 @@ class TelemetryStore:
 
     def get_total_events(self) -> int:
         """Get total number of telemetry events."""
-        row = self._conn.execute(
-            "SELECT COUNT(*) as cnt FROM events"
-        ).fetchone()
+        row = self._conn.execute("SELECT COUNT(*) as cnt FROM events").fetchone()
         return int(row["cnt"])
 
     def get_first_event_time(self) -> str | None:
         """Get timestamp of the earliest event."""
-        row = self._conn.execute(
-            "SELECT MIN(timestamp) as ts FROM events"
-        ).fetchone()
+        row = self._conn.execute("SELECT MIN(timestamp) as ts FROM events").fetchone()
         return row["ts"] if row and row["ts"] else None
 
     def get_last_event_time(self) -> str | None:
         """Get timestamp of the most recent event."""
-        row = self._conn.execute(
-            "SELECT MAX(timestamp) as ts FROM events"
-        ).fetchone()
+        row = self._conn.execute("SELECT MAX(timestamp) as ts FROM events").fetchone()
         return row["ts"] if row and row["ts"] else None
 
     def get_daily_activity(self, last_n_days: int = 7) -> list[tuple[str, int]]:

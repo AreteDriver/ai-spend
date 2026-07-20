@@ -163,9 +163,7 @@ def config_add(
             app_ctx.store.add_provider(name, provider_type)
         except Exception:
             pass  # Already exists in store is fine
-        console.print(
-            f"[green]Added provider '{pc.name}' ({pc.provider_type})[/green]"
-        )
+        console.print(f"[green]Added provider '{pc.name}' ({pc.provider_type})[/green]")
     except ConfigError as e:
         _handle_error(e, app_ctx.verbose)
 
@@ -208,12 +206,13 @@ def config_edit(
     try:
         if api_key is None and provider_type is None:
             console.print(
-                "[yellow]No changes specified. "
-                "Use --key or --type to edit.[/yellow]"
+                "[yellow]No changes specified. Use --key or --type to edit.[/yellow]"
             )
             raise typer.Exit(1)
         pc = cfg.edit_provider(
-            name, api_key=api_key, provider_type=provider_type,
+            name,
+            api_key=api_key,
+            provider_type=provider_type,
             config_dir=app_ctx.config_dir,
         )
         # Also update in the store if type changed
@@ -238,8 +237,7 @@ def config_list(ctx: typer.Context) -> None:
     providers = cfg.list_providers(app_ctx.config_dir)
     if not providers:
         console.print(
-            "[dim]No providers configured. "
-            "Use 'ai-spend config add' to add one.[/dim]"
+            "[dim]No providers configured. Use 'ai-spend config add' to add one.[/dim]"
         )
         return
     console.print(format_providers_table(providers))
@@ -371,9 +369,7 @@ def sync(
                         f"[cyan]{pc.name}:[/cyan] would sync {len(records)} records"
                     )
                     for r in records[:3]:
-                        console.print(
-                            f"  {r.date} | {r.model} | ${r.cost_usd:.4f}"
-                        )
+                        console.print(f"  {r.date} | {r.model} | ${r.cost_usd:.4f}")
                     if len(records) > 3:
                         console.print(f"  ... and {len(records) - 3} more")
                     continue
@@ -453,9 +449,7 @@ def summary(
 def daily(
     ctx: typer.Context,
     last: Annotated[int, typer.Option("--last", "-n", help="Number of days")] = 7,
-    json_output: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
     provider: Annotated[
         str | None,
         typer.Option("--provider", help="Filter by provider name"),
@@ -551,9 +545,7 @@ def _do_export(
     result = export_records(records, fmt)
     if output:
         output.write_text(result)
-        console.print(
-            f"[green]Exported {len(records)} records to {output}[/green]"
-        )
+        console.print(f"[green]Exported {len(records)} records to {output}[/green]")
     else:
         console.print(result)
 
@@ -672,13 +664,9 @@ def prune(
     cutoff = date.today() - timedelta(days=older_than)
     count = store.prune_records(cutoff, dry_run=dry_run)
     if dry_run:
-        console.print(
-            f"[cyan]Would delete {count} records older than {cutoff}[/cyan]"
-        )
+        console.print(f"[cyan]Would delete {count} records older than {cutoff}[/cyan]")
     else:
-        console.print(
-            f"[green]Deleted {count} records older than {cutoff}[/green]"
-        )
+        console.print(f"[green]Deleted {count} records older than {cutoff}[/green]")
 
 
 # --- Health ---
@@ -697,14 +685,10 @@ def health(ctx: typer.Context) -> None:
     try:
         row = store._conn.execute("PRAGMA integrity_check").fetchone()
         if row and row[0] == "ok":
-            console.print(
-                "[green]✓ Database integrity check passed[/green]"
-            )
+            console.print("[green]✓ Database integrity check passed[/green]")
         else:
             detail = row[0] if row else "unknown"
-            console.print(
-                f"[red]✗ Database integrity failed: {detail}[/red]"
-            )
+            console.print(f"[red]✗ Database integrity failed: {detail}[/red]")
             all_ok = False
     except Exception as e:
         console.print(f"[red]✗ Database integrity check error: {e}[/red]")
@@ -731,9 +715,7 @@ def health(ctx: typer.Context) -> None:
             and not (mode & stat.S_IRWXO)
         )
         if ok:
-            console.print(
-                "[green]✓ Config directory permissions OK[/green]"
-            )
+            console.print("[green]✓ Config directory permissions OK[/green]")
         else:
             console.print(
                 f"[yellow]! Config dir permissions: "
@@ -757,9 +739,7 @@ def health(ctx: typer.Context) -> None:
                 and not (mode & stat.S_IROTH)
             )
             if ok:
-                console.print(
-                    "[green]✓ Config file permissions OK[/green]"
-                )
+                console.print("[green]✓ Config file permissions OK[/green]")
             else:
                 console.print(
                     f"[yellow]! Config file permissions: "
@@ -794,9 +774,7 @@ def health(ctx: typer.Context) -> None:
     if all_ok:
         console.print("\n[bold green]All checks passed[/bold green]")
     else:
-        console.print(
-            "\n[bold yellow]Some checks raised warnings[/bold yellow]"
-        )
+        console.print("\n[bold yellow]Some checks raised warnings[/bold yellow]")
 
 
 # --- Status ---
@@ -818,9 +796,7 @@ def status(ctx: typer.Context) -> None:
 
     budget = store.get_budget()
     if budget:
-        console.print(
-            f"Budget: [cyan]${budget.total_usd:.2f}/{budget.period}[/cyan]"
-        )
+        console.print(f"Budget: [cyan]${budget.total_usd:.2f}/{budget.period}[/cyan]")
     else:
         console.print("Budget: [dim]not set[/dim]")
 
@@ -836,9 +812,7 @@ def status(ctx: typer.Context) -> None:
 @app.command()
 def stats(
     ctx: typer.Context,
-    json_output: Annotated[
-        bool, typer.Option("--json", help="Output as JSON")
-    ] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ) -> None:
     """Show local usage telemetry (requires AI_SPEND_TELEMETRY=1)."""
     app_ctx: AppContext = ctx.obj
@@ -873,9 +847,7 @@ def stats(
             console.print(json.dumps(data, indent=2))
         else:
             console.print(
-                format_stats_table(
-                    commands, pro_gates, total, first, last, activity
-                )
+                format_stats_table(commands, pro_gates, total, first, last, activity)
             )
     finally:
         ts.close()

@@ -234,4 +234,3 @@ class TestConfigBackup:
         # The backup is the encrypted pre-edit file; the new file is different
         new_file = config_path.read_bytes()
         assert backup != new_file
-
