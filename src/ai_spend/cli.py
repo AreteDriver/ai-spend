@@ -148,6 +148,47 @@ def config_remove(
         _handle_error(e, app_ctx.verbose)
 
 
+@config_app.command("edit")
+def config_edit(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="Provider name to edit")],
+    api_key: Annotated[
+        str | None,
+        typer.Option("--key", "-k", help="New API key"),
+    ] = None,
+    provider_type: Annotated[
+        ProviderType | None,
+        typer.Option("--type", "-t", help="New provider type"),
+    ] = None,
+) -> None:
+    """Edit an existing provider configuration."""
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "config.edit")
+    try:
+        if api_key is None and provider_type is None:
+            console.print(
+                "[yellow]No changes specified. "
+                "Use --key or --type to edit.[/yellow]"
+            )
+            raise typer.Exit(1)
+        pc = cfg.edit_provider(
+            name, api_key=api_key, provider_type=provider_type,
+            config_dir=app_ctx.config_dir,
+        )
+        # Also update in the store if type changed
+        if provider_type is not None:
+            try:
+                app_ctx.store.remove_provider(name)
+                app_ctx.store.add_provider(name, provider_type)
+            except Exception:
+                pass
+        console.print(
+            f"[green]Updated provider '{pc.name}' ({pc.provider_type})[/green]"
+        )
+    except ConfigError as e:
+        _handle_error(e, app_ctx.verbose)
+
+
 @config_app.command("list")
 def config_list(ctx: typer.Context) -> None:
     """List all configured providers."""

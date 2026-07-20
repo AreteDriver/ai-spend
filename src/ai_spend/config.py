@@ -103,6 +103,31 @@ def list_providers(config_dir: Path | None = None) -> list[ProviderConfig]:
     ]
 
 
+def edit_provider(
+    name: str,
+    *,
+    api_key: str | None = None,
+    provider_type: ProviderType | None = None,
+    config_dir: Path | None = None,
+) -> ProviderConfig:
+    """Edit an existing provider's fields."""
+    data = _load_config(config_dir)
+    providers = data.get("providers", [])
+    for p in providers:
+        if p.get("name") == name:
+            if api_key is not None:
+                p["api_key"] = api_key
+            if provider_type is not None:
+                p["provider_type"] = provider_type.value
+            _save_config(data, config_dir)
+            return ProviderConfig(
+                name=name,
+                provider_type=ProviderType(p["provider_type"]),
+                api_key=p.get("api_key", ""),
+            )
+    raise ConfigError(f"Provider '{name}' not found")
+
+
 def get_provider(name: str, config_dir: Path | None = None) -> ProviderConfig | None:
     """Get a single provider config by name."""
     for p in list_providers(config_dir):

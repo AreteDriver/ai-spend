@@ -29,7 +29,7 @@ class TestVersion:
     def test_version_flag(self):
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
-        assert "0.2.0" in result.stdout
+        assert "0.3.0" in result.stdout
 
     def test_version_short(self):
         result = runner.invoke(app, ["-v"])
@@ -95,6 +95,37 @@ class TestConfigRemove:
 
     def test_remove_missing(self):
         result = runner.invoke(app, ["config", "remove", "nope"])
+        assert result.exit_code == 1
+        assert "not found" in result.stdout
+
+
+class TestConfigEdit:
+    def test_edit_api_key(self):
+        runner.invoke(app, ["config", "add", "x", "manual", "-k", "old-key"])
+        result = runner.invoke(
+            app, ["config", "edit", "x", "--key", "new-key"]
+        )
+        assert result.exit_code == 0
+        assert "Updated" in result.stdout
+
+    def test_edit_type(self):
+        runner.invoke(app, ["config", "add", "x", "manual"])
+        result = runner.invoke(
+            app, ["config", "edit", "x", "--type", "anthropic"]
+        )
+        assert result.exit_code == 0
+        assert "anthropic" in result.stdout
+
+    def test_edit_no_changes(self):
+        runner.invoke(app, ["config", "add", "x", "manual"])
+        result = runner.invoke(app, ["config", "edit", "x"])
+        assert result.exit_code == 1
+        assert "No changes" in result.stdout
+
+    def test_edit_missing(self):
+        result = runner.invoke(
+            app, ["config", "edit", "nonexistent", "--key", "k"]
+        )
         assert result.exit_code == 1
         assert "not found" in result.stdout
 
