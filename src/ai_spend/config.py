@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import os
 import stat
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Any
 
 import yaml
 
+from ai_spend.crypto import decrypt, encrypt, get_or_create_key
 from ai_spend.exceptions import ConfigError
 from ai_spend.models import ProviderConfig, ProviderType
 
@@ -33,17 +35,43 @@ def _config_path(config_dir: Path | None = None) -> Path:
     return d / _CONFIG_FILE
 
 
+def _decrypt_config(data: dict[str, Any], config_dir: Path) -> dict[str, Any]:
+    """Transparently decrypt API keys in loaded config."""
+    key_path = config_dir / ".key"
+    if not key_path.exists():
+        return data
+    key = key_path.read_bytes().strip()
+    for p in data.get("providers", []):
+        api_key = p.get("api_key")
+        if api_key:
+            p["api_key"] = decrypt(api_key, key)
+    return data
+
+
 def _load_config(config_dir: Path | None = None) -> dict[str, Any]:
     """Load YAML config from disk."""
-    path = _config_path(config_dir)
+    d = config_dir or get_config_dir()
+    path = d / _CONFIG_FILE
     if not path.exists():
         return {"providers": []}
     try:
         with open(path) as f:
             data = yaml.safe_load(f)
-        return data if isinstance(data, dict) else {"providers": []}
+        data = data if isinstance(data, dict) else {"providers": []}
+        return _decrypt_config(data, d)
     except (yaml.YAMLError, OSError) as e:
         raise ConfigError(f"Failed to read config: {e}") from e
+
+
+def _encrypt_config(data: dict[str, Any], config_dir: Path) -> dict[str, Any]:
+    """Return a deep copy with API keys encrypted at rest."""
+    key = get_or_create_key(config_dir)
+    out = copy.deepcopy(data)
+    for p in out.get("providers", []):
+        api_key = p.get("api_key")
+        if api_key:
+            p["api_key"] = encrypt(api_key, key)
+    return out
 
 
 def _save_config(data: dict[str, Any], config_dir: Path | None = None) -> None:
@@ -51,9 +79,10 @@ def _save_config(data: dict[str, Any], config_dir: Path | None = None) -> None:
     d = config_dir or get_config_dir()
     _ensure_config_dir(d)
     path = d / _CONFIG_FILE
+    data_to_save = _encrypt_config(data, d)
     try:
         with open(path, "w") as f:
-            yaml.safe_dump(data, f, default_flow_style=False)
+            yaml.safe_dump(data_to_save, f, default_flow_style=False)
         path.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0o600
     except OSError as e:
         raise ConfigError(f"Failed to write config: {e}") from e
@@ -126,6 +155,14 @@ def edit_provider(
                 api_key=p.get("api_key", ""),
             )
     raise ConfigError(f"Provider '{name}' not found")
+
+
+def encrypt_config(config_dir: Path | None = None) -> None:
+    """Force encryption of all existing plaintext API keys in config."""
+    d = config_dir or get_config_dir()
+    data = _load_config(d)
+    # Re-saving transparently encrypts any plaintext keys.
+    _save_config(data, d)
 
 
 def get_provider(name: str, config_dir: Path | None = None) -> ProviderConfig | None:

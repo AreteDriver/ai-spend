@@ -11,6 +11,7 @@ from ai_spend.config import (
     _load_config,
     _save_config,
     add_provider,
+    encrypt_config,
     get_provider,
     list_providers,
     remove_provider,
@@ -111,4 +112,74 @@ class TestProviderCRUD:
         assert "a" in names
         assert "c" in names
 
+
+class TestEncryptionAtRest:
+    def _read_raw_yaml(self, config_dir: Path) -> dict:
+        import yaml
+
+        with open(config_dir / "config.yaml") as f:
+            return yaml.safe_load(f)
+
+    def test_add_provider_encrypts_key(self, tmp_config_dir: Path):
+        key = "secret-api-key-123"
+        add_provider("x", ProviderType.OPENAI, key, tmp_config_dir)
+        # list_providers returns decrypted plaintext
+        providers = list_providers(tmp_config_dir)
+        assert providers[0].api_key == key
+        # On-disk YAML should be encrypted
+        raw = self._read_raw_yaml(tmp_config_dir)
+        assert raw["providers"][0]["api_key"] != key
+
+    def test_load_decrypts_existing_keys(self, tmp_config_dir: Path):
+        key = "my-key"
+        add_provider("x", ProviderType.OPENAI, key, tmp_config_dir)
+        # Simulate fresh load
+        providers = list_providers(tmp_config_dir)
+        assert providers[0].api_key == key
+
+    def test_edit_provider_re_encrypts(self, tmp_config_dir: Path):
+        from ai_spend.config import edit_provider
+
+        add_provider("x", ProviderType.OPENAI, "old", tmp_config_dir)
+        edit_provider("x", api_key="new", config_dir=tmp_config_dir)
+        providers = list_providers(tmp_config_dir)
+        assert providers[0].api_key == "new"
+        raw = self._read_raw_yaml(tmp_config_dir)
+        assert raw["providers"][0]["api_key"] != "new"
+
+    def test_encrypt_config_migrates_plaintext(self, tmp_config_dir: Path):
+        # Write plaintext config manually (legacy)
+        import yaml
+
+        path = tmp_config_dir / "config.yaml"
+        with open(path, "w") as f:
+            yaml.safe_dump(
+                {
+                    "providers": [
+                        {"name": "x", "provider_type": "openai", "api_key": "plain"}
+                    ]
+                },
+                f,
+            )
+        # Remove the key file to simulate pre-encryption state
+        key_path = tmp_config_dir / ".key"
+        if key_path.exists():
+            key_path.unlink()
+        encrypt_config(tmp_config_dir)
+        # Now load should decrypt transparently
+        providers = list_providers(tmp_config_dir)
+        assert providers[0].api_key == "plain"
+
+    def test_empty_key_not_encrypted(self, tmp_config_dir: Path):
+        add_provider("x", ProviderType.MANUAL, "", tmp_config_dir)
+        raw = self._read_raw_yaml(tmp_config_dir)
+        assert raw["providers"][0]["api_key"] == ""
+
+    def test_key_file_created_with_save(self, tmp_config_dir: Path):
+        add_provider("x", ProviderType.OPENAI, "k", tmp_config_dir)
+        key_path = tmp_config_dir / ".key"
+        assert key_path.exists()
+        mode = key_path.stat().st_mode
+        assert not (mode & stat.S_IRGRP)
+        assert not (mode & stat.S_IROTH)
 

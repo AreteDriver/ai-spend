@@ -204,6 +204,18 @@ def config_list(ctx: typer.Context) -> None:
     console.print(format_providers_table(providers))
 
 
+@config_app.command("encrypt")
+def config_encrypt(ctx: typer.Context) -> None:
+    """Encrypt all API keys at rest."""
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "config.encrypt")
+    try:
+        cfg.encrypt_config(app_ctx.config_dir)
+        console.print("[green]Config encrypted.[/green]")
+    except ConfigError as e:
+        _handle_error(e, app_ctx.verbose)
+
+
 @config_app.command("validate")
 def config_validate(ctx: typer.Context) -> None:
     """Validate API credentials for all configured providers."""
