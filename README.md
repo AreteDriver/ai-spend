@@ -171,6 +171,12 @@ ai-spend sync --verbose
 export AI_SPEND_LICENSE=ASPD-XXXX-XXXX-XXXX
 ```
 
+## Related Projects
+
+- **[mcp-manager](https://github.com/AreteDriver/mcp-manager)** — MCP server lifecycle manager across agentic IDEs (`pip install arete-mcp`)
+- **[agent-lint](https://github.com/AreteDriver/agent-lint)** — Catch expensive agent workflows before they ship (`pip install agentlinter`)
+- **[animus](https://github.com/AreteDriver/animus)** — The AI operating environment that uses ai-spend for cost observability
+
 ## Community
 
 [Discord](https://discord.gg/fdzQkrt8) — Join the community
