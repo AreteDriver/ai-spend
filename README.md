@@ -167,4 +167,8 @@ Licensed under BSL-1.1. See [LICENSE](LICENSE).
 
 ## License
 
-[BSL-1.1](https://mariadb.com/bsl11/) (Business Source License 1.1)
+Licensed under [BSL-1.1](https://mariadb.com/bsl11/) (Business Source License 1.1).
+
+- **Free for non-production use** — personal projects, research, evaluation
+- **Production use requires a license** after the Change Date (4 years from release)
+- See [LICENSE](LICENSE) for full terms
