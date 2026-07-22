@@ -108,7 +108,7 @@ ai-spend budget check              # Check against budget
 # Manual entries (for providers without billing APIs)
 ai-spend manual add 12.50 --provider ollama --note "local GPU costs"
 
-# Export (Pro)
+# Export
 ai-spend export --format csv
 ai-spend export --format json
 
@@ -121,7 +121,7 @@ ai-spend prune --older-than 90     # Delete records older than 90 days
 ai-spend prune --older-than 90 --dry-run  # Preview deletion
 
 # Status
-ai-spend status                    # License tier + system info
+ai-spend status                    # System info and config health
 ai-spend stats                     # Telemetry (set AI_SPEND_TELEMETRY=1)
 ai-spend stats --json              # Structured JSON telemetry
 ```
@@ -151,25 +151,9 @@ ai-spend sync --verbose
 # {"ts": "...", "level": "info", "msg": "sync_start", "fields": {"provider": "..."}}
 ```
 
-## Free vs Pro
+## License
 
-| Feature | Free | Pro ($8/mo) |
-|---------|:---:|:---:|
-| Sync + summary + daily | Yes | Yes |
-| Budget tracking | Yes | Yes |
-| Manual entries | Yes | Yes |
-| JSON output | Yes | Yes |
-| Unlimited providers | 3 max | Yes |
-| CSV/JSON export | -- | Yes |
-
-**Get Pro:** [Monthly ($8/mo)](https://buy.stripe.com/28E4gzbphbp9cJC4g7grS04) | [Yearly ($69/yr)](https://buy.stripe.com/7sYcN564Xctd10U5kbgrS05)
-
-**All 5 Tools Bundle:** [Monthly ($29/mo)](https://buy.stripe.com/7sY9AT9h90Kv5ha27ZgrS0a) | [Yearly ($199/yr)](https://buy.stripe.com/9B6fZh9h98cX24YfYPgrS0b) — includes claudemd-forge, agent-lint, ai-spend, promptctl, context-hygiene
-
-**Activate:**
-```bash
-export AI_SPEND_LICENSE=ASPD-XXXX-XXXX-XXXX
-```
+Licensed under BSL-1.1. See [LICENSE](LICENSE).
 
 ## Related Projects
 
