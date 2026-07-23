@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/AreteDriver/ai-spend/actions/workflows/ci.yml/badge.svg)](https://github.com/AreteDriver/ai-spend/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/AreteDriver/ai-spend/actions/workflows/codeql.yml/badge.svg)](https://github.com/AreteDriver/ai-spend/actions/workflows/codeql.yml)
+[![PyPI](https://img.shields.io/pypi/v/ai-spend.svg)](https://pypi.org/project/ai-spend/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL-1.1](https://img.shields.io/badge/License-BSL--1.1-blue.svg)](https://mariadb.com/bsl11/)
 
