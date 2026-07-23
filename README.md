@@ -9,6 +9,8 @@
 
 `ai-spend` aggregates usage data from **Anthropic, OpenAI, and OpenRouter** directly into your terminal. Your API keys stay local. Your prompts are never seen. Your data never leaves your machine.
 
+![ai-spend summary demo](docs/assets/ai-spend-demo.gif)
+
 ```
 $ ai-spend summary
 
