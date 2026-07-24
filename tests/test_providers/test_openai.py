@@ -63,7 +63,8 @@ class TestOpenAIProvider:
                             "results": [{"model": "gpt-4o", "amount": {"value": 1.0}}],
                         }
                     ],
-                    "next_cursor": "cursor1",
+                    "has_more": True,
+                    "next_page": "page_2_token",
                 },
             ),
             httpx.Response(
@@ -75,12 +76,16 @@ class TestOpenAIProvider:
                             "results": [{"model": "gpt-4o", "amount": {"value": 2.0}}],
                         }
                     ],
+                    "has_more": False,
                 },
             ),
         ]
         records = provider.fetch_usage(date(2026, 2, 19), date(2026, 2, 20))
         assert len(records) == 2
         assert route.call_count == 2
+        # Verify page param was sent on second request
+        second_request = route.calls[1].request
+        assert "page=page_2_token" in str(second_request.url)
 
     @respx.mock
     def test_fetch_usage_empty(self, provider: OpenAIProvider):
@@ -120,30 +125,6 @@ class TestOpenAIProvider:
     def test_validate_credentials_connection_error(self, provider: OpenAIProvider):
         respx.get(f"{_BASE_URL}/costs").mock(side_effect=httpx.ConnectError("refused"))
         assert provider.validate_credentials() is False
-
-    @respx.mock
-    def test_fetch_with_object_id_model(self, provider: OpenAIProvider):
-        """OpenAI can nest model name in result.object.id."""
-        respx.get(f"{_BASE_URL}/costs").mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "data": [
-                        {
-                            "start_time": 1771459200,
-                            "results": [
-                                {
-                                    "object": {"id": "gpt-4-turbo"},
-                                    "amount": {"value": 0.10},
-                                }
-                            ],
-                        }
-                    ],
-                },
-            )
-        )
-        records = provider.fetch_usage(date(2026, 2, 19), date(2026, 2, 19))
-        assert records[0].model == "gpt-4-turbo"
 
     @respx.mock
     def test_fetch_missing_amount(self, provider: OpenAIProvider):

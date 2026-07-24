@@ -63,9 +63,10 @@ class TestProviderCRUD:
         store.remove_provider("x")
         assert store.list_providers() == []
 
-    def test_remove_nonexistent_raises(self, store: SpendStore):
-        with pytest.raises(StoreError, match="not found"):
-            store.remove_provider("nope")
+    def test_remove_nonexistent_is_noop(self, store: SpendStore):
+        """Removing a missing provider is idempotent."""
+        store.remove_provider("nope")
+        assert store.list_providers() == []
 
     def test_get_provider(self, store: SpendStore):
         store.add_provider("a", ProviderType.ANTHROPIC)

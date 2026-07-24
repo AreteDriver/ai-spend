@@ -57,14 +57,47 @@ def _backup_db(db_path: Path) -> Path:
     import shutil
 
     shutil.copy2(db_path, backup_path)
+    backup_path.chmod(0o600)
     return backup_path
 
 
+def _split_sql_statements(sql: str) -> list[str]:
+    """Split a SQL script into individual statements.
+
+    Skips comments, blank lines, and transaction-control statements
+    (BEGIN, COMMIT, ROLLBACK) so the caller can manage its own tx.
+    """
+    statements: list[str] = []
+    current: list[str] = []
+
+    for line in sql.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("--") or not stripped:
+            continue
+        current.append(line)
+        if stripped.endswith(";"):
+            stmt = "\n".join(current).strip()
+            upper = stmt.upper().rstrip(";").split()[0]
+            if upper not in ("BEGIN", "COMMIT", "ROLLBACK", "END"):
+                statements.append(stmt)
+            current = []
+
+    if current:
+        stmt = "\n".join(current).strip()
+        if stmt:
+            upper = stmt.upper().rstrip(";").split()[0]
+            if upper not in ("BEGIN", "COMMIT", "ROLLBACK", "END"):
+                statements.append(stmt)
+
+    return statements
+
+
 def _apply_migration(conn: sqlite3.Connection, version: int, sql: str) -> None:
-    """Apply a single migration script within a transaction."""
+    """Apply a single migration script within an explicit transaction."""
     conn.execute("BEGIN")
     try:
-        conn.executescript(sql)
+        for stmt in _split_sql_statements(sql):
+            conn.execute(stmt)
         conn.execute(
             "INSERT OR REPLACE INTO schema_version"
             " (version, applied_at) VALUES (?, datetime('now'))",
@@ -142,10 +175,8 @@ class SpendStore:
         """Remove a provider and its usage records."""
         self._conn.execute("DELETE FROM usage_records WHERE provider_id = ?", (name,))
         self._conn.execute("DELETE FROM sync_log WHERE provider_id = ?", (name,))
-        cur = self._conn.execute("DELETE FROM providers WHERE name = ?", (name,))
+        self._conn.execute("DELETE FROM providers WHERE name = ?", (name,))
         self._conn.commit()
-        if cur.rowcount == 0:
-            raise StoreError(f"Provider '{name}' not found")
 
     def list_providers(self) -> list[tuple[str, ProviderType]]:
         """List all registered providers."""

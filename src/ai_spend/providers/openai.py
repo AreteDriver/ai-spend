@@ -23,9 +23,9 @@ class OpenAIProvider(BaseProvider):
         return ProviderType.OPENAI
 
     def fetch_usage(self, start: date, end: date) -> list[UsageRecord]:
-        """Fetch costs from OpenAI Admin API with cursor pagination."""
+        """Fetch costs from OpenAI Admin API with page pagination."""
         records: list[UsageRecord] = []
-        cursor: str | None = None
+        page_token: str | None = None
         start_ts = int(
             datetime.combine(
                 start, datetime.min.time(), tzinfo=timezone.utc
@@ -42,8 +42,8 @@ class OpenAIProvider(BaseProvider):
                         "start_time": start_ts,
                         "end_time": end_ts,
                     }
-                    if cursor:
-                        params["cursor"] = cursor
+                    if page_token:
+                        params["page"] = page_token
 
                     resp = _make_request(
                         client,
@@ -60,11 +60,7 @@ class OpenAIProvider(BaseProvider):
                         bucket_date = datetime.fromtimestamp(ts, tz=timezone.utc).date()
 
                         for result in bucket.get("results", []):
-                            obj = result.get("object")
-                            if isinstance(obj, dict):
-                                model_name = obj.get("id", "unknown")
-                            else:
-                                model_name = result.get("model", "unknown")
+                            model_name = result.get("model", "unknown")
                             raw_cost = result.get("amount", {}).get("value", 0.0)
                             cost = Decimal(str(raw_cost))
                             input_tokens = result.get("input_tokens", 0)
@@ -81,8 +77,10 @@ class OpenAIProvider(BaseProvider):
                                 )
                             )
 
-                    cursor = data.get("next_cursor")
-                    if not cursor:
+                    if not data.get("has_more"):
+                        break
+                    page_token = data.get("next_page")
+                    if not page_token:
                         break
 
         except httpx.HTTPStatusError as e:

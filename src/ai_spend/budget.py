@@ -39,6 +39,8 @@ def set_budget(
 ) -> BudgetConfig:
     """Set or update the budget."""
     total = Decimal(str(total_usd)) if not isinstance(total_usd, Decimal) else total_usd
+    if total.is_nan() or not total.is_finite():
+        raise BudgetError("Budget must be a valid finite number")
     if total <= 0:
         raise BudgetError("Budget must be greater than zero")
 

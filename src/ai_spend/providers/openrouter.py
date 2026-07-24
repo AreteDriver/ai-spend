@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from decimal import Decimal
 
 import httpx
@@ -16,90 +16,85 @@ _BASE_URL = "https://openrouter.ai/api/v1"
 
 
 class OpenRouterProvider(BaseProvider):
-    """Fetch usage data from the OpenRouter API."""
+    """Fetch usage data from the OpenRouter Analytics API.
+
+    Uses the beta ``POST /api/v1/analytics/query`` endpoint with daily
+    granularity and ``model`` dimension.  Requires a **Management API Key**
+    (regular inference keys will receive 403).
+    """
 
     @property
     def provider_type(self) -> ProviderType:
         return ProviderType.OPENROUTER
 
     def fetch_usage(self, start: date, end: date) -> list[UsageRecord]:
-        """Fetch costs from OpenRouter generations API with cursor pagination."""
+        """Fetch aggregated usage data from OpenRouter Analytics API."""
         records: list[UsageRecord] = []
-        cursor: str | None = None
-        start_ts = int(
-            datetime.combine(
-                start, datetime.min.time(), tzinfo=timezone.utc
-            ).timestamp()
-        )
-        end_ts = int(
-            datetime.combine(end, datetime.max.time(), tzinfo=timezone.utc).timestamp()
-        )
 
         try:
             with httpx.Client(timeout=30.0) as client:
-                while True:
-                    params: dict[str, str | int] = {
-                        "start_time": start_ts,
-                        "end_time": end_ts,
-                        "limit": 100,
-                    }
-                    if cursor:
-                        params["cursor"] = cursor
+                body = {
+                    "metrics": [
+                        "total_usage",
+                        "tokens_prompt",
+                        "tokens_completion",
+                    ],
+                    "dimensions": ["model"],
+                    "granularity": "day",
+                    "time_range": {
+                        "start": f"{start.isoformat()}T00:00:00Z",
+                        "end": f"{end.isoformat()}T23:59:59Z",
+                    },
+                    "limit": 10000,
+                }
 
-                    resp = _make_request(
-                        client,
-                        "GET",
-                        f"{_BASE_URL}/generations",
-                        headers={
-                            "Authorization": f"Bearer {self.api_key}",
-                            "HTTP-Referer": "https://github.com/AreteDriver/ai-spend",
-                            "X-Title": "ai-spend",
-                        },
-                        params=params,
-                    )
-                    data = resp.json()
+                resp = _make_request(
+                    client,
+                    "POST",
+                    f"{_BASE_URL}/analytics/query",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://github.com/AreteDriver/ai-spend",
+                        "X-Title": "ai-spend",
+                    },
+                    json=body,
+                )
+                payload = resp.json()
+                data = payload.get("data", {})
+                rows = data.get("data", [])
 
-                    for gen in data.get("data", []):
-                        created_at = gen.get("created_at", 0)
-                        if isinstance(created_at, (int, float)):
-                            gen_date = datetime.fromtimestamp(
-                                created_at, tz=timezone.utc
-                            ).date()
-                        else:
-                            gen_date = start
+                for row in rows:
+                    bucket_date = self._parse_date(row.get("date__day", ""))
+                    model_name = row.get("model", "unknown")
 
-                        model_name = gen.get("model", "unknown")
-                        # OpenRouter returns native_cost in USD
-                        raw_cost = gen.get("native_cost", 0.0)
-                        cost = Decimal(str(raw_cost))
-                        # Fallback to tokens if cost not available
-                        if cost == Decimal("0"):
-                            total_tokens = gen.get("native_tokens_prompt", 0) + gen.get(
-                                "native_tokens_completion", 0
-                            )
-                            # Rough estimate: ~$0.0015 per 1K tokens average
-                            cost = Decimal(str(total_tokens)) * Decimal("0.0000015")
+                    # total_usage is cost in USD (float)
+                    raw_cost = row.get("total_usage", 0.0)
+                    cost = Decimal(str(raw_cost))
 
-                        input_tokens = gen.get("native_tokens_prompt", 0)
-                        output_tokens = gen.get("native_tokens_completion", 0)
+                    # Token counts may be returned as strings
+                    input_tokens = self._to_int(row.get("tokens_prompt", 0))
+                    output_tokens = self._to_int(row.get("tokens_completion", 0))
 
-                        records.append(
-                            UsageRecord(
-                                provider_id=self.name,
-                                provider_type=ProviderType.OPENROUTER,
-                                date=gen_date,
-                                model=model_name,
-                                input_tokens=input_tokens,
-                                output_tokens=output_tokens,
-                                cost_usd=cost,
-                            )
+                    records.append(
+                        UsageRecord(
+                            provider_id=self.name,
+                            provider_type=ProviderType.OPENROUTER,
+                            date=bucket_date,
+                            model=model_name,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            cost_usd=cost,
                         )
+                    )
 
-                    # OpenRouter uses offset-based or cursor-based pagination
-                    # Check for next cursor in response
-                    cursor = data.get("next_cursor")
-                    if not cursor or not data.get("data"):
-                        break
+                # Warn if results were truncated
+                metadata = data.get("metadata", {})
+                if metadata.get("truncated"):
+                    raise ProviderError(
+                        "OpenRouter Analytics API returned truncated results. "
+                        "Narrow your sync date range and retry."
+                    )
 
         except httpx.HTTPStatusError as e:
             raise ProviderError(
@@ -109,6 +104,21 @@ class OpenRouterProvider(BaseProvider):
             raise ProviderError(f"OpenRouter API request failed: {e}") from e
 
         return records
+
+    @staticmethod
+    def _parse_date(value: str) -> date:
+        """Parse ISO 8601 timestamp (with trailing Z) to a date."""
+        if not value:
+            return date.today()
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return dt.date()
+
+    @staticmethod
+    def _to_int(value: int | str | None) -> int:
+        """Convert a possibly-string metric to int."""
+        if value is None:
+            return 0
+        return int(value)
 
     def validate_credentials(self) -> bool:
         """Validate OpenRouter API key."""

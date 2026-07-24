@@ -31,13 +31,15 @@ class TestAnthropicProvider:
                 json={
                     "data": [
                         {
-                            "date": "2026-02-19",
-                            "models": [
+                            "starting_at": "2026-02-19T00:00:00Z",
+                            "ending_at": "2026-02-20T00:00:00Z",
+                            "results": [
                                 {
                                     "model": "claude-sonnet-4-20250514",
-                                    "cost": "0.015",
-                                    "input_tokens": 1000,
-                                    "output_tokens": 500,
+                                    "amount": "1.5",
+                                    "currency": "USD",
+                                    "cost_type": "tokens",
+                                    "token_type": "output_tokens",
                                 }
                             ],
                         }
@@ -48,8 +50,11 @@ class TestAnthropicProvider:
         records = provider.fetch_usage(date(2026, 2, 19), date(2026, 2, 19))
         assert len(records) == 1
         assert records[0].model == "claude-sonnet-4-20250514"
+        # 1.5 cents → $0.015 USD
         assert records[0].cost_usd == Decimal("0.015")
-        assert records[0].input_tokens == 1000
+        # Cost Report does not provide token counts
+        assert records[0].input_tokens == 0
+        assert records[0].output_tokens == 0
 
     @respx.mock
     def test_fetch_usage_pagination(self, provider: AnthropicProvider):
@@ -60,18 +65,21 @@ class TestAnthropicProvider:
                 json={
                     "data": [
                         {
-                            "date": "2026-02-18",
-                            "models": [
+                            "starting_at": "2026-02-18T00:00:00Z",
+                            "ending_at": "2026-02-19T00:00:00Z",
+                            "results": [
                                 {
-                                    "model": "claude",
-                                    "cost": "1.0",
-                                    "input_tokens": 100,
-                                    "output_tokens": 50,
+                                    "model": "claude-sonnet",
+                                    "amount": "100",
+                                    "currency": "USD",
+                                    "cost_type": "tokens",
+                                    "token_type": "uncached_input_tokens",
                                 }
                             ],
                         }
                     ],
-                    "next_cursor": "abc123",
+                    "has_more": True,
+                    "next_page": "page_2_token",
                 },
             ),
             httpx.Response(
@@ -79,23 +87,29 @@ class TestAnthropicProvider:
                 json={
                     "data": [
                         {
-                            "date": "2026-02-19",
-                            "models": [
+                            "starting_at": "2026-02-19T00:00:00Z",
+                            "ending_at": "2026-02-20T00:00:00Z",
+                            "results": [
                                 {
-                                    "model": "claude",
-                                    "cost": "2.0",
-                                    "input_tokens": 200,
-                                    "output_tokens": 100,
+                                    "model": "claude-sonnet",
+                                    "amount": "200",
+                                    "currency": "USD",
+                                    "cost_type": "tokens",
+                                    "token_type": "output_tokens",
                                 }
                             ],
                         }
                     ],
+                    "has_more": False,
                 },
             ),
         ]
         records = provider.fetch_usage(date(2026, 2, 18), date(2026, 2, 19))
         assert len(records) == 2
         assert route.call_count == 2
+        # Verify page param was sent on second request
+        second_request = route.calls[1].request
+        assert "page=page_2_token" in str(second_request.url)
 
     @respx.mock
     def test_fetch_usage_empty(self, provider: AnthropicProvider):
@@ -148,19 +162,22 @@ class TestAnthropicProvider:
                 json={
                     "data": [
                         {
-                            "date": "2026-02-19",
-                            "models": [
+                            "starting_at": "2026-02-19T00:00:00Z",
+                            "ending_at": "2026-02-20T00:00:00Z",
+                            "results": [
                                 {
                                     "model": "claude-sonnet",
-                                    "cost": "1.0",
-                                    "input_tokens": 100,
-                                    "output_tokens": 50,
+                                    "amount": "100",
+                                    "currency": "USD",
+                                    "cost_type": "tokens",
+                                    "token_type": "uncached_input_tokens",
                                 },
                                 {
                                     "model": "claude-haiku",
-                                    "cost": "0.5",
-                                    "input_tokens": 500,
-                                    "output_tokens": 200,
+                                    "amount": "50",
+                                    "currency": "USD",
+                                    "cost_type": "tokens",
+                                    "token_type": "output_tokens",
                                 },
                             ],
                         }
@@ -172,3 +189,73 @@ class TestAnthropicProvider:
         assert len(records) == 2
         models = {r.model for r in records}
         assert models == {"claude-sonnet", "claude-haiku"}
+        # 100 cents → $1.00 ; 50 cents → $0.50
+        by_model = {r.model: r.cost_usd for r in records}
+        assert by_model["claude-sonnet"] == Decimal("1.00")
+        assert by_model["claude-haiku"] == Decimal("0.50")
+
+    @respx.mock
+    def test_fetch_aggregates_same_model_results(self, provider: AnthropicProvider):
+        """Multiple result rows for the same model are aggregated."""
+        respx.get(f"{_BASE_URL}/cost_report").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "starting_at": "2026-02-19T00:00:00Z",
+                            "ending_at": "2026-02-20T00:00:00Z",
+                            "results": [
+                                {
+                                    "model": "claude-sonnet",
+                                    "amount": "100",
+                                    "currency": "USD",
+                                    "cost_type": "tokens",
+                                    "token_type": "uncached_input_tokens",
+                                },
+                                {
+                                    "model": "claude-sonnet",
+                                    "amount": "50",
+                                    "currency": "USD",
+                                    "cost_type": "tokens",
+                                    "token_type": "output_tokens",
+                                },
+                            ],
+                        }
+                    ],
+                },
+            )
+        )
+        records = provider.fetch_usage(date(2026, 2, 19), date(2026, 2, 19))
+        assert len(records) == 1
+        # 100 cents + 50 cents = 150 cents → $1.50
+        assert records[0].cost_usd == Decimal("1.50")
+
+    @respx.mock
+    def test_fetch_usage_fractional_cents(self, provider: AnthropicProvider):
+        """Amounts with fractional cents are handled with Decimal precision."""
+        respx.get(f"{_BASE_URL}/cost_report").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "starting_at": "2026-02-19T00:00:00Z",
+                            "ending_at": "2026-02-20T00:00:00Z",
+                            "results": [
+                                {
+                                    "model": "claude-opus",
+                                    "amount": "123.78912",
+                                    "currency": "USD",
+                                    "cost_type": "tokens",
+                                }
+                            ],
+                        }
+                    ],
+                },
+            )
+        )
+        records = provider.fetch_usage(date(2026, 2, 19), date(2026, 2, 19))
+        assert len(records) == 1
+        # 123.78912 cents → $1.2378912
+        assert records[0].cost_usd == Decimal("1.2378912")

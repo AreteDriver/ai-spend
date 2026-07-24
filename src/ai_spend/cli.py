@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import signal
+import sqlite3
 import stat
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -158,11 +159,11 @@ def config_add(
                 raise typer.Exit(1)
 
         pc = cfg.add_provider(name, provider_type, api_key, app_ctx.config_dir)
-        # Also register in the store
+        # Also register in the store (idempotent — OK if already exists)
         try:
             app_ctx.store.add_provider(name, provider_type)
-        except Exception:
-            pass  # Already exists in store is fine
+        except sqlite3.IntegrityError:
+            pass
         console.print(f"[green]Added provider '{pc.name}' ({pc.provider_type})[/green]")
     except ConfigError as e:
         _handle_error(e, app_ctx.verbose)
@@ -178,10 +179,7 @@ def config_remove(
     app_ctx.track("command", "config.remove")
     try:
         cfg.remove_provider(name, app_ctx.config_dir)
-        try:
-            app_ctx.store.remove_provider(name)
-        except Exception:
-            pass
+        app_ctx.store.remove_provider(name)
         console.print(f"[green]Removed provider '{name}'[/green]")
     except ConfigError as e:
         _handle_error(e, app_ctx.verbose)
