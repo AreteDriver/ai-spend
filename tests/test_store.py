@@ -480,8 +480,24 @@ class TestMigrationEdgeCases:
             SpendStore(db)
 
     def test_db_init_failure(self, tmp_path: Path):
-        """Cover store.py lines 91-92: garbage bytes cause StoreError."""
+        """Cover store.py lines 124-131: garbage bytes trigger auto-healing."""
         db = tmp_path / "spend.db"
         db.write_bytes(b"NOT A SQLITE FILE")
-        with pytest.raises(StoreError, match="Failed to initialize"):
-            SpendStore(db)
+        # Should heal corrupted DB instead of raising StoreError
+        store = SpendStore(db)
+        assert db.exists()
+        # Verify the healed DB is functional
+        store.add_provider("manual", ProviderType.MANUAL)
+        store.add_usage_records([
+            UsageRecord(
+                provider_id="manual",
+                provider_type=ProviderType.MANUAL,
+                date=date.today(),
+                model="test-model",
+                input_tokens=1,
+                output_tokens=1,
+                cost_usd=Decimal("0"),
+                metadata={},
+            )
+        ])
+        store.close()

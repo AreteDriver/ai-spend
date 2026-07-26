@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import signal
 import sqlite3
@@ -28,7 +29,7 @@ from ai_spend.exceptions import (
 from ai_spend.gates import require_pro
 from ai_spend.licensing import MAX_FREE_PROVIDERS, get_license
 from ai_spend.log import configure_logging, get_logger
-from ai_spend.models import ExportFormat, ProviderType, SyncStatus
+from ai_spend.models import ExportFormat, ProviderType, SyncStatus, UsageRecord
 from ai_spend.providers.manual import ManualProvider
 from ai_spend.reporter import (
     export_records,
@@ -48,10 +49,12 @@ app = typer.Typer(name="ai-spend", help="Aggregate AI API costs across providers
 config_app = typer.Typer(name="config", help="Manage provider configurations.")
 budget_app = typer.Typer(name="budget", help="Manage spending budgets.")
 manual_app = typer.Typer(name="manual", help="Manual cost entries.")
+markers_app = typer.Typer(name="markers", help="Ingest session-guard marathon markers.")
 
 app.add_typer(config_app)
 app.add_typer(budget_app)
 app.add_typer(manual_app)
+app.add_typer(markers_app)
 
 console = Console()
 logger = get_logger(__name__)
@@ -638,6 +641,162 @@ def manual_add(
     record = mp.create_entry(model, cost_decimal, d, note)
     store.add_usage_records([record])
     console.print(f"[green]Added ${cost_decimal:.2f} for '{model}' on {d}[/green]")
+
+
+# --- Markers ---
+
+
+_MARKERS_DIR = Path.home() / ".local" / "share" / "ai-spend" / "marathons"
+
+
+@markers_app.command("ingest")
+def markers_ingest(
+    ctx: typer.Context,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", "-n", help="Preview what would be ingested"),
+    ] = False,
+) -> None:
+    """Ingest session-guard marathon markers into the spend store."""
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "markers.ingest")
+    store = app_ctx.store
+
+    if not _MARKERS_DIR.exists():
+        console.print("[dim]No markers directory found.[/dim]")
+        raise typer.Exit(0)
+
+    marker_files = sorted(_MARKERS_DIR.glob("*.json"))
+    if not marker_files:
+        console.print("[dim]No marker files to ingest.[/dim]")
+        raise typer.Exit(0)
+
+    records: list[UsageRecord] = []
+    skipped = 0
+    for mf in marker_files:
+        try:
+            data = json.loads(mf.read_text())
+        except (json.JSONDecodeError, OSError):
+            skipped += 1
+            continue
+
+        session_id = data.get("session_id", "unknown")
+        cwd = data.get("cwd", "unknown")
+        model = data.get("model", "unknown")
+        provider_type_str = data.get("provider_type", "manual")
+        try:
+            provider_type = ProviderType(provider_type_str)
+        except ValueError:
+            provider_type = ProviderType.MANUAL
+
+        cost_usd = Decimal(str(data.get("cost_usd", "0.00")))
+        turns = int(data.get("turns", 0))
+        input_tokens = int(data.get("input_tokens", 0))
+        output_tokens = int(data.get("output_tokens", 0))
+        drift_pct = int(data.get("drift_pct", 0))
+        context_limits = int(data.get("context_limits", 0))
+        plan_type = data.get("plan_type", "metered")
+        monthly_token_limit = data.get("monthly_token_limit", 0)
+
+        # Parse date from marker filename or data
+        date_str = data.get("date", "")
+        if not date_str or date_str == "unknown":
+            # Try to extract from filename: YYYY-MM-DD_session-id.json
+            date_str = mf.stem.split("_")[0] if "_" in mf.stem else ""
+        try:
+            d = date.fromisoformat(date_str)
+        except ValueError:
+            d = date.today()
+
+        # Deterministic record_id so re-ingestion is idempotent
+        raw = f"{session_id}:{d.isoformat()}:{model}"
+        record_id = hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        records.append(
+            UsageRecord(
+                provider_id="claude-code",
+                provider_type=provider_type,
+                date=d,
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
+                metadata={
+                    "session_id": session_id,
+                    "cwd": cwd,
+                    "turns": str(turns),
+                    "drift_pct": str(drift_pct),
+                    "context_limits": str(context_limits),
+                    "plan_type": plan_type,
+                    "monthly_token_limit": str(monthly_token_limit),
+                    "marker_file": str(mf.name),
+                },
+            )
+        )
+
+    if dry_run:
+        console.print(f"[cyan]Would ingest {len(records)} marker records[/cyan]")
+        for r in records[:5]:
+            console.print(f"  {r.date} | {r.model} | ${r.cost_usd:.2f} | {r.metadata.get('session_id', '')}")
+        if len(records) > 5:
+            console.print(f"  ... and {len(records) - 5} more")
+        return
+
+    # Ensure provider exists
+    if store.get_provider("claude-code") is None:
+        store.add_provider("claude-code", ProviderType.MANUAL)
+
+    # Use direct SQL with a custom per-session record_id to avoid
+    # UsageRecord.record_id collision (provider_id:date:model is not
+    # unique across different sessions).
+    with store.transaction() as conn:
+        for r in records:
+            raw = f"{r.metadata.get('session_id', r.provider_id)}:{r.date.isoformat()}:{r.model}"
+            record_id = hashlib.sha256(raw.encode()).hexdigest()[:16]
+            conn.execute(
+                """INSERT OR REPLACE INTO usage_records
+                   (record_id, provider_id, provider_type, date, model,
+                    input_tokens, output_tokens, cost_usd, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    record_id,
+                    r.provider_id,
+                    r.provider_type.value,
+                    r.date.isoformat(),
+                    r.model,
+                    r.input_tokens,
+                    r.output_tokens,
+                    str(r.cost_usd),
+                    json.dumps(r.metadata),
+                ),
+            )
+    console.print(f"[green]Ingested {len(records)} marker records ({skipped} skipped)[/green]")
+
+
+@markers_app.command("list")
+def markers_list(ctx: typer.Context) -> None:
+    """List pending marker files without ingesting them."""
+    app_ctx: AppContext = ctx.obj
+    app_ctx.track("command", "markers.list")
+
+    if not _MARKERS_DIR.exists():
+        console.print("[dim]No markers directory found.[/dim]")
+        return
+
+    marker_files = sorted(_MARKERS_DIR.glob("*.json"))
+    if not marker_files:
+        console.print("[dim]No marker files.[/dim]")
+        return
+
+    console.print(f"[bold]{len(marker_files)} marker file(s):[/bold]")
+    for mf in marker_files:
+        try:
+            data = json.loads(mf.read_text())
+            cost = data.get("cost_usd", "?")
+            model = data.get("model", "unknown")
+            console.print(f"  {mf.name} | {model} | ${cost}")
+        except (json.JSONDecodeError, OSError):
+            console.print(f"  {mf.name} | [red]unreadable[/red]")
 
 
 # --- Prune ---

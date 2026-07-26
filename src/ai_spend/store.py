@@ -121,6 +121,14 @@ class SpendStore:
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.row_factory = sqlite3.Row
             self._run_migrations()
+        except sqlite3.DatabaseError:
+            # Corrupted or non-SQLite file — remove and recreate
+            db_path.unlink(missing_ok=True)
+            self._conn = sqlite3.connect(str(db_path))
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA foreign_keys=ON")
+            self._conn.row_factory = sqlite3.Row
+            self._run_migrations()
         except sqlite3.Error as e:
             raise StoreError(f"Failed to initialize database: {e}") from e
 

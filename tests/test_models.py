@@ -32,7 +32,7 @@ class TestProviderType:
         assert ProviderType("anthropic") is ProviderType.ANTHROPIC
 
     def test_all_members(self):
-        assert len(ProviderType) == 4
+        assert len(ProviderType) == 5  # anthropic, openai, cohere, synthetic, ollama
 
 
 class TestBucketWidth:
