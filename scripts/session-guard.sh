@@ -112,7 +112,15 @@ _should_notify_today() {
     [[ ! -f "$NOTIFY_STATE_FILE" ]] && return 0
     local last_day; last_day=$(grep "^daily-summary " "$NOTIFY_STATE_FILE" 2>/dev/null | awk '{print $2}' || echo "")
     [[ -z "$last_day" || "$last_day" != "$today" ]] && return 0
-    return 1
+
+    # Respect NOTIFY_MAX_PER_CYCLE (default 1)
+    local max_per_cycle=${NOTIFY_MAX_PER_CYCLE:-1}
+    local count_today
+    count_today=$(grep "^notify " "$NOTIFY_STATE_FILE" 2>/dev/null | awk -v d="$today" '$2 == d {count++} END {print count+0}' || echo "0")
+    if (( count_today >= max_per_cycle )); then
+        return 1
+    fi
+    return 0
 }
 
 _record_daily_notification() {
@@ -121,6 +129,8 @@ _record_daily_notification() {
     touch "$NOTIFY_STATE_FILE"
     grep -v "^daily-summary " "$NOTIFY_STATE_FILE" > "${NOTIFY_STATE_FILE}.tmp" 2>/dev/null || true
     echo "daily-summary $today" >> "${NOTIFY_STATE_FILE}.tmp"
+    # Also record a per-notification entry for NOTIFY_MAX_PER_CYCLE counting
+    echo "notify $today $(date +%s)" >> "${NOTIFY_STATE_FILE}.tmp"
     mv "${NOTIFY_STATE_FILE}.tmp" "$NOTIFY_STATE_FILE"
 }
 
@@ -133,7 +143,7 @@ _cleanup_old_markers() {
     # Compact notified-sessions state: keep only last 90 days of per-session entries
     if [[ -f "$NOTIFY_STATE_FILE" ]]; then
         local cutoff_epoch
-        cutoff_epoch=$(date -d '90 days ago' +%s 2>/dev/null || echo "0")
+        cutoff_epoch=$(python3 -c "import time; print(int(time.time()) - 90*86400)")
         grep -v "^daily-summary " "$NOTIFY_STATE_FILE" | while read -r sess_id epoch; do
             [[ "$epoch" =~ ^[0-9]+$ ]] || continue
             if (( epoch > cutoff_epoch )); then
@@ -182,18 +192,40 @@ _show_status() {
         echo "  Markers: 0 files"
     fi
 
-    # Quick scan preview
-    echo ""
-    echo "  Last scan preview:"
-    local scan_err
-    scan_err=$(mktemp)
-    if _scan_once >/dev/null 2>"$scan_err"; then
-        echo "    (scan succeeded — see above for details)"
+    # Cached last-scan data
+    local last_scan_file
+    last_scan_file="${STATE_DIR}/last-scan.json"
+    if [[ -f "$last_scan_file" ]]; then
+        local last_scan_age
+        last_scan_age=$(python3 -c "import os, time; print(int(time.time() - os.path.getmtime('$last_scan_file')))")
+        echo ""
+        echo "  Last scan: ${last_scan_age}s ago"
+        local cached_breach cached_cost cached_turns
+        cached_breach=$(python3 -c "import sys,json; d=json.load(open('$last_scan_file')); print('true' if d.get('breach',False) else 'false')")
+        cached_cost=$(python3 -c "import sys,json; d=json.load(open('$last_scan_file')); print(d.get('total_cloud_cost',0))")
+        cached_turns=$(python3 -c "import sys,json; d=json.load(open('$last_scan_file')); print(d.get('total_cloud_turns',0))")
+        echo "    Cloud: \$${cached_cost} | ${cached_turns} turns | breach=${cached_breach}"
+        if (( last_scan_age > 7200 )); then
+            echo "    ⚠️  Cache is stale (>2h); next daemon run will refresh"
+        fi
     else
-        echo "    (scan failed — last stderr lines:)"
-        tail -5 "$scan_err" | sed 's/^/      /'
+        echo ""
+        echo "  Last scan: never (daemon not yet run)"
     fi
-    rm -f "$scan_err"
+
+    # Health check: last successful scan timestamp
+    local last_scan_ok
+    last_scan_ok="${STATE_DIR}/last-scan-ok"
+    if [[ -f "$last_scan_ok" ]]; then
+        local last_ok_age
+        last_ok_age=$(python3 -c "import os, time; print(int(time.time() - os.path.getmtime('$last_scan_ok')))")
+        echo "  Health: last OK ${last_ok_age}s ago"
+        if (( last_ok_age > INTERVAL * 2 )); then
+            echo "    ⚠️  No successful scan in >2 intervals — check daemon logs"
+        fi
+    else
+        echo "  Health: no successful scan recorded"
+    fi
 }
 
 # --- Scan logic ---
@@ -218,17 +250,33 @@ _scan_once() {
 
     local total_cloud_cost total_cloud_turns total_cloud_tokens
     local ollama_reqs_24h ollama_electricity_cost model_mix_shift
-    local forecast_message comparison_message breach
+    local forecast_message comparison_message breach monthly_forecast
 
-    total_cloud_cost=$(echo "$analysis_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('total_cloud_cost',0))")
-    total_cloud_turns=$(echo "$analysis_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('total_cloud_turns',0))")
-    total_cloud_tokens=$(echo "$analysis_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('total_cloud_tokens',0))")
-    ollama_reqs_24h=$(echo "$analysis_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ollama_requests_24h',0))")
-    ollama_electricity_cost=$(echo "$analysis_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ollama_electricity_cost',0))")
-    model_mix_shift=$(echo "$analysis_json" | python3 -c "import sys,json; d=json.load(sys.stdin).get('model_mix_shift',''); print(d)")
-    forecast_message=$(echo "$analysis_json" | python3 -c "import sys,json; d=json.load(sys.stdin).get('forecast_message',''); print(d)")
-    comparison_message=$(echo "$analysis_json" | python3 -c "import sys,json; d=json.load(sys.stdin).get('comparison_message',''); print(d)")
-    breach=$(echo "$analysis_json" | python3 -c "import sys,json; print('true' if json.load(sys.stdin).get('breach',False) else 'false')")
+    # Single-pass JSON parse: extract all fields at once (avoids 9× python3 forks)
+    readarray -t _fields < <(python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(d.get('total_cloud_cost', 0))
+print(d.get('total_cloud_turns', 0))
+print(d.get('total_cloud_tokens', 0))
+print(d.get('ollama_requests_24h', 0))
+print(d.get('ollama_electricity_cost', 0))
+print(d.get('model_mix_shift', ''))
+print(d.get('forecast_message', ''))
+print(d.get('comparison_message', ''))
+print('true' if d.get('breach', False) else 'false')
+print(d.get('monthly_forecast', ''))
+" <<< "$analysis_json")
+    total_cloud_cost=${_fields[0]}
+    total_cloud_turns=${_fields[1]}
+    total_cloud_tokens=${_fields[2]}
+    ollama_reqs_24h=${_fields[3]}
+    ollama_electricity_cost=${_fields[4]}
+    model_mix_shift=${_fields[5]}
+    forecast_message=${_fields[6]}
+    comparison_message=${_fields[7]}
+    breach=${_fields[8]}
+    monthly_forecast=${_fields[9]}
 
     # Format numbers
     local cloud_cost_fmt tokens_fmt elec_fmt
@@ -243,10 +291,6 @@ else:
     print(str(t))
 ")
     elec_fmt=$(python3 -c "print(f'{float('$ollama_electricity_cost'):.2f}')")
-
-    # Parse monthly forecast from JSON
-    local monthly_forecast
-    monthly_forecast=$(echo "$analysis_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('monthly_forecast',''))")
 
     # Build digest body (metered vs flat)
     local body=""
@@ -289,6 +333,13 @@ else:
     local urgency="normal"
     if [[ "$breach" == "true" ]]; then
         urgency="critical"
+    fi
+
+    # Cache scan output for fast --status reads
+    if [[ "$DRY_RUN" != true ]]; then
+        mkdir -p "$STATE_DIR"
+        echo "$analysis_json" > "${STATE_DIR}/last-scan.json"
+        touch "${STATE_DIR}/last-scan-ok"
     fi
 
     if [[ "$DRY_RUN" == true ]]; then

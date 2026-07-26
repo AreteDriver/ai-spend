@@ -676,7 +676,8 @@ def markers_ingest(
     for mf in marker_files:
         try:
             data = json.loads(mf.read_text())
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as e:
+            console.print(f"[yellow]Skipping corrupted marker {mf.name}: {e}[/yellow]")
             skipped += 1
             continue
 

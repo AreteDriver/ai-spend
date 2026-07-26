@@ -228,26 +228,35 @@ def _scan_cloud_sessions(verbose: bool) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def _poll_ollama() -> dict[str, Any]:
-    """Poll Ollama /api/ps and /api/tags."""
+    """Poll Ollama /api/ps and /api/tags with retry backoff."""
     result = {"models": [], "error": None}
-    try:
-        import urllib.request
-        import urllib.error
-        with urllib.request.urlopen(
-            "http://localhost:11434/api/ps", timeout=5
-        ) as resp:
-            data = json.loads(resp.read())
-            result["models"] = [
-                {
-                    "name": m.get("name", "?"),
-                    "size_vram": m.get("size_vram", 0),
-                }
-                for m in data.get("models", [])
-            ]
-    except (urllib.error.URLError, ConnectionRefusedError, TimeoutError) as e:
-        result["error"] = f"{type(e).__name__}: {e}"
-    except json.JSONDecodeError as e:
-        result["error"] = f"JSON decode: {e}"
+    import urllib.request
+    import urllib.error
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            with urllib.request.urlopen(
+                "http://localhost:11434/api/ps", timeout=5
+            ) as resp:
+                data = json.loads(resp.read())
+                result["models"] = [
+                    {
+                        "name": m.get("name", "?"),
+                        "size_vram": m.get("size_vram", 0),
+                    }
+                    for m in data.get("models", [])
+                ]
+                return result
+        except (urllib.error.URLError, ConnectionRefusedError, TimeoutError) as e:
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(1 + attempt)  # 1s, 2s backoff
+                continue
+            result["error"] = f"{type(e).__name__}: {e}"
+        except json.JSONDecodeError as e:
+            result["error"] = f"JSON decode: {e}"
+            return result
     return result
 
 
@@ -413,7 +422,7 @@ def _detect_gpu() -> tuple[str, int]:
                 )
                 if "amd" in pci.stdout.lower() and "vga" in pci.stdout.lower():
                     return "amd gpu", 250
-    except Exception:
+    except (OSError, PermissionError):
         pass
 
     return "unknown", 200
@@ -430,10 +439,12 @@ def _estimate_ollama_electricity(models: list[dict[str, Any]], reqs_24h: int) ->
 
     _, gpu_tdp = _detect_gpu()
 
-    # Heuristic: model size in GB affects power draw
+    # Heuristic: model size in GB affects power draw multiplier
     total_vram = sum(m.get("size_vram", 0) for m in models)
-    if total_vram == 0:
-        return Decimal("0")
+    # Scale TDP by VRAM load: +3% per GB, capped at +30%
+    vram_multiplier = Decimal("1.0") + min(
+        Decimal(str(total_vram)) * Decimal("0.03"), Decimal("0.30")
+    )
 
     # Average request takes ~3s, GPU at ~60% load during inference.
     # Idle power: ~10% TDP when loaded but not processing.
@@ -443,9 +454,10 @@ def _estimate_ollama_electricity(models: list[dict[str, Any]], reqs_24h: int) ->
     if hours_idle < 0:
         hours_idle = Decimal("0")
 
+    effective_tdp = Decimal(str(gpu_tdp)) * vram_multiplier
     energy_kwh = (
-        (hours_active * Decimal(str(gpu_tdp)) * Decimal("0.6"))
-        + (hours_idle * Decimal(str(gpu_tdp)) * Decimal("0.1"))
+        (hours_active * effective_tdp * Decimal("0.6"))
+        + (hours_idle * effective_tdp * Decimal("0.1"))
     ) / Decimal("1000")
 
     cost = energy_kwh * KWH_RATE
@@ -643,6 +655,8 @@ def _forecast_monthly_limit(
     if elapsed < 21_600:  # Need at least 6 hours for a stable burn-rate estimate
         return f"Monthly limit: ~? days (insufficient data — {elapsed/3600:.1f}h tracked)"
 
+    # NOTE: This assumes a 24/7 burn rate. For intermittent usage (e.g., 9-5),
+    # the forecast will be pessimistic because elapsed includes idle hours.
     rate_per_day = total_tokens / elapsed * 86400
     if rate_per_day <= 0:
         return None
