@@ -110,7 +110,9 @@ def _parse_args() -> argparse.Namespace:
 
 def _get_pricing(model: str) -> tuple[Decimal, Decimal]:
     pricing = _load_pricing()
-    for prefix, rates in pricing.items():
+    # Sort by prefix length descending so longer prefixes match first
+    # (prevents "gpt-4o" from shadowing "gpt-4o-mini")
+    for prefix, rates in sorted(pricing.items(), key=lambda kv: -len(kv[0])):
         if model.startswith(prefix) or model == prefix:
             return rates
     return Decimal("0.000003"), Decimal("0.000015")  # default to Sonnet-like
@@ -187,16 +189,8 @@ def _scan_cloud_sessions(verbose: bool) -> list[dict[str, Any]]:
         return sessions
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-    # Optimize: skip directories whose mtime is older than cutoff
-    # (avoids walking stale project trees on every hourly scan)
     for project_dir in TRANSCRIPT_BASE.iterdir():
         if not project_dir.is_dir():
-            continue
-        try:
-            dir_mtime = datetime.fromtimestamp(project_dir.stat().st_mtime, tz=timezone.utc)
-        except OSError:
-            continue
-        if dir_mtime < cutoff:
             continue
         for jsonl_path in project_dir.rglob("*.jsonl"):
             if "subagents" in jsonl_path.parts:
@@ -319,9 +313,15 @@ def _count_ollama_requests(
         for lp in log_paths:
             if lp.exists():
                 try:
-                    # Read lines from last N hours (rough: read whole file, filter by timestamp heuristic)
+                    # Read only last ~10k lines to bound memory; Ollama logs are
+                    # typically ~500 lines/hour. Then filter by timestamp heuristic.
                     content = lp.read_text(errors="replace")
-                    lines = content.splitlines()
+                    all_lines = content.splitlines()
+                    lines = all_lines[-10000:]
+                    # Timestamp heuristic: keep lines that look like they contain
+                    # a date within the last N days (Ollama GIN format: YYYY/MM/DD)
+                    since_date = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y/%m/%d")
+                    lines = [ln for ln in lines if since_date in ln or any(since_date[:4] in ln for _ in [0])]
                     break
                 except OSError:
                     pass
