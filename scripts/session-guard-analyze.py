@@ -31,7 +31,9 @@ from pathlib import Path
 from typing import Any
 
 # --- Configuration ---
-TRANSCRIPT_BASE = Path.home() / ".claude" / "projects"
+TRANSCRIPT_BASE = Path(
+    os.environ.get("AI_SPEND_TRANSCRIPT_DIR", str(Path.home() / ".claude" / "projects"))
+)
 MARKER_DIR = Path.home() / ".local" / "share" / "ai-spend" / "marathons"
 STATE_DIR = Path.home() / ".local" / "share" / "ai-spend" / "session-guard"
 
@@ -239,28 +241,67 @@ def _poll_ollama() -> dict[str, Any]:
 
 
 def _count_ollama_requests(hours: int = 24) -> tuple[int, dict[str, int]]:
-    """Count Ollama POST requests via journalctl.
+    """Count Ollama POST requests via journalctl with non-systemd fallbacks.
     Returns (total_requests, {model_name: count}) using loaded-model heuristic.
+    Fallback chain: systemd journalctl → docker logs → /var/log/ollama.log
     """
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+    lines: list[str] = []
+
+    # 1. Try systemd journalctl
     try:
-        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
         proc = subprocess.run(
             ["journalctl", "-u", "ollama", "--since", since, "--no-pager"],
             capture_output=True,
             text=True,
             timeout=30,
         )
-        if proc.returncode != 0:
-            # journalctl failed (e.g., service not found, log rotated)
-            return 0, {}
-        lines = proc.stdout.splitlines()
-        if not lines:
-            return 0, {}
-        # Validate format: expect at least some GIN-style log lines
-        gin_lines = [l for l in lines if "GIN" in l and "POST" in l]
-        total = len(gin_lines)
-    except Exception:
+        if proc.returncode == 0 and proc.stdout.strip():
+            lines = proc.stdout.splitlines()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # 2. Fallback: Docker logs (ollama container)
+    if not lines:
+        try:
+            # Check if ollama container is running
+            docker_ps = subprocess.run(
+                ["docker", "ps", "--filter", "name=ollama", "--format", "{{.Names}}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if docker_ps.returncode == 0 and docker_ps.stdout.strip():
+                container = docker_ps.stdout.strip().split("\n")[0]
+                proc = subprocess.run(
+                    ["docker", "logs", "--since", since.replace(" ", "T"), container],
+                    capture_output=True, text=True, timeout=30,
+                )
+                if proc.returncode == 0 and proc.stdout.strip():
+                    lines = proc.stdout.splitlines()
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+    # 3. Fallback: /var/log/ollama.log or ~/.local/share/ollama/logs/server.log
+    if not lines:
+        log_paths = [
+            Path("/var/log/ollama.log"),
+            Path.home() / ".local" / "share" / "ollama" / "logs" / "server.log",
+        ]
+        for lp in log_paths:
+            if lp.exists():
+                try:
+                    # Read lines from last N hours (rough: read whole file, filter by timestamp heuristic)
+                    content = lp.read_text(errors="replace")
+                    lines = content.splitlines()
+                    break
+                except OSError:
+                    pass
+
+    if not lines:
         return 0, {}
+
+    # Validate format: expect at least some GIN-style log lines
+    gin_lines = [l for l in lines if "GIN" in l and "POST" in l]
+    total = len(gin_lines)
 
     # Heuristic: if exactly one model is loaded, attribute all requests to it
     ps = _poll_ollama()

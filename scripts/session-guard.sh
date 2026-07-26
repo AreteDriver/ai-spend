@@ -24,9 +24,9 @@ PLAN_TYPE=${PLAN_TYPE:-metered}
 MONTHLY_TOKEN_LIMIT=${MONTHLY_TOKEN_LIMIT:-1000000000}
 MAX_COST_USD=${MAX_COST_USD:-50}
 MAX_TURNS=${MAX_TURNS:-500}
-MAX_DRIFT_PCT=${MAX_DRIFT_PCT:-70}
 MAX_CONTEXT_LIMITS=${MAX_CONTEXT_LIMITS:-1}
 INTERVAL=${INTERVAL:-3600}
+TRANSCRIPT_DIR=${TRANSCRIPT_DIR:-"${HOME}/.claude/projects"}
 DAEMON=${DAEMON:-false}
 VERBOSE=${VERBOSE:-false}
 DRY_RUN=${DRY_RUN:-false}
@@ -193,7 +193,7 @@ _scan_once() {
     local analysis_json
     local analyzer_stderr
     analyzer_stderr=$(mktemp)
-    analysis_json=$(python3 "$ANALYZER" \
+    analysis_json=$(AI_SPEND_TRANSCRIPT_DIR="$TRANSCRIPT_DIR" python3 "$ANALYZER" \
         --plan-type "$PLAN_TYPE" \
         --monthly-token-limit "$MONTHLY_TOKEN_LIMIT" \
         --max-cost "$MAX_COST_USD" \
