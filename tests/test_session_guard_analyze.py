@@ -443,6 +443,7 @@ class TestWriteOllamaMarker:
         data = json.loads(marker_path.read_text())
         assert data["session_id"] == "ollama"
         assert data["model"] == "ollama-aggregate"
+        assert data["input_tokens"] == 1500  # mapped from reqs_24h for queryability
         assert data["ollama"]["requests_24h"] == 1500
         assert data["ollama"]["electricity_cost_usd"] == 1.23
         assert data["ollama"]["models_loaded"] == ["llama3.1", "mistral"]
@@ -469,6 +470,7 @@ class TestWriteOllamaMarker:
 
         assert second_mtime >= first_mtime
         data = json.loads((fake_markers / f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}_ollama.json").read_text())
+        assert data["input_tokens"] == 200
         assert data["ollama"]["requests_24h"] == 200
 
 

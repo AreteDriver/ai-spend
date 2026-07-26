@@ -713,7 +713,7 @@ def _write_ollama_marker(
         "monthly_token_limit": args.monthly_token_limit,
         "cost_usd": 0.0,  # flat plan assumption
         "turns": reqs_24h,
-        "input_tokens": 0,
+        "input_tokens": reqs_24h,   # Store requests as tokens for queryability in SpendStore
         "output_tokens": 0,
         "context_limits": 0,
         "alerts": alerts,
