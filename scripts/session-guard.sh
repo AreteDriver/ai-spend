@@ -116,7 +116,7 @@ _should_notify_today() {
     # Respect NOTIFY_MAX_PER_CYCLE (default 1)
     local max_per_cycle=${NOTIFY_MAX_PER_CYCLE:-1}
     local count_today
-    count_today=$(grep "^notify " "$NOTIFY_STATE_FILE" 2>/dev/null | awk -v d="$today" '$2 == d {count++} END {print count+0}' || echo "0")
+    count_today=$(grep "^notify " "$NOTIFY_STATE_FILE" 2>/dev/null | awk -v d="$today" '$3 == d {count++} END {print count+0}' || echo "0")
     if (( count_today >= max_per_cycle )); then
         return 1
     fi
@@ -129,8 +129,9 @@ _record_daily_notification() {
     touch "$NOTIFY_STATE_FILE"
     grep -v "^daily-summary " "$NOTIFY_STATE_FILE" > "${NOTIFY_STATE_FILE}.tmp" 2>/dev/null || true
     echo "daily-summary $today" >> "${NOTIFY_STATE_FILE}.tmp"
-    # Also record a per-notification entry for NOTIFY_MAX_PER_CYCLE counting
-    echo "notify $today $(date +%s)" >> "${NOTIFY_STATE_FILE}.tmp"
+    # Also record a per-notification entry for NOTIFY_MAX_PER_CYCLE counting.
+    # Store epoch FIRST so state-compaction regex (^[0-9]+$) matches it.
+    echo "notify $(date +%s) $today" >> "${NOTIFY_STATE_FILE}.tmp"
     mv "${NOTIFY_STATE_FILE}.tmp" "$NOTIFY_STATE_FILE"
 }
 
@@ -252,20 +253,31 @@ _scan_once() {
     local ollama_reqs_24h ollama_electricity_cost model_mix_shift
     local forecast_message comparison_message breach monthly_forecast
 
-    # Single-pass JSON parse: extract all fields at once (avoids 9× python3 forks)
+    # Single-pass JSON parse: extract all fields at once (avoids 9× python3 forks).
+    # Multi-line string values are collapsed to single-line so readarray
+    # field alignment is preserved.
     readarray -t _fields < <(python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-print(d.get('total_cloud_cost', 0))
-print(d.get('total_cloud_turns', 0))
-print(d.get('total_cloud_tokens', 0))
-print(d.get('ollama_requests_24h', 0))
-print(d.get('ollama_electricity_cost', 0))
-print(d.get('model_mix_shift', ''))
-print(d.get('forecast_message', ''))
-print(d.get('comparison_message', ''))
-print('true' if d.get('breach', False) else 'false')
-print(d.get('monthly_forecast', ''))
+for key, default in [
+    ('total_cloud_cost', 0),
+    ('total_cloud_turns', 0),
+    ('total_cloud_tokens', 0),
+    ('ollama_requests_24h', 0),
+    ('ollama_electricity_cost', 0),
+    ('model_mix_shift', ''),
+    ('forecast_message', ''),
+    ('comparison_message', ''),
+    ('breach', False),
+    ('monthly_forecast', ''),
+]:
+    v = d.get(key, default)
+    if isinstance(v, bool):
+        print('true' if v else 'false')
+    elif isinstance(v, str):
+        print(v.replace(chr(10), ' '))
+    else:
+        print(v)
 " <<< "$analysis_json")
     total_cloud_cost=${_fields[0]}
     total_cloud_turns=${_fields[1]}

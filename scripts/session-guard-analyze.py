@@ -17,9 +17,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import glob
 import json
-import math
 import os
 import re
 import subprocess
@@ -263,6 +261,7 @@ def _poll_ollama() -> dict[str, Any]:
 def _count_ollama_requests(
     hours: int = 24,
     distribution_proxy: dict[str, int] | None = None,
+    state: dict[str, Any] | None = None,
 ) -> tuple[int, dict[str, int]]:
     """Count Ollama POST requests via journalctl with non-systemd fallbacks.
     Returns (total_requests, {model_name: count}) using loaded-model heuristic.
@@ -272,6 +271,7 @@ def _count_ollama_requests(
         hours: Time window to query.
         distribution_proxy: Optional 1-hour model distribution to use as ratio
             proxy for the N-hour total. Prevents recursive journalctl calls.
+        state: Optional pre-fetched Ollama state to avoid an extra /api/ps poll.
     """
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
     lines: list[str] = []
@@ -334,7 +334,7 @@ def _count_ollama_requests(
     total = len(gin_lines)
 
     # Heuristic: if exactly one model is loaded, attribute all requests to it
-    ps = _poll_ollama()
+    ps = state if state is not None else _poll_ollama()
     loaded = ps.get("models", [])
     if len(loaded) == 1:
         return total, {loaded[0]["name"]: total}
@@ -412,11 +412,11 @@ def _detect_gpu() -> tuple[str, int]:
     except FileNotFoundError:
         pass
 
-    # Check /proc for AMD GPU
+    # Heuristic: AMD CPU often paired with AMD GPU. Check /proc/cpuinfo for
+    # AMD CPU, then lspci for AMD VGA device. This is a fallback, not exact.
     try:
         for line in Path("/proc/cpuinfo").read_text().splitlines():
             if "model name" in line.lower() and "amd" in line.lower():
-                # Check PCI for GPU
                 pci = subprocess.run(
                     ["lspci"], capture_output=True, text=True, timeout=5
                 )
@@ -688,9 +688,9 @@ def main() -> None:
     ollama_state = _poll_ollama()
     # Query 1-hour distribution first, then pass it as proxy for 24-hour attribution
     # (avoids 3 journalctl calls: 24h + recursive 1h + explicit 1h)
-    ollama_reqs_1h, ollama_by_model_1h = _count_ollama_requests(1)
+    ollama_reqs_1h, ollama_by_model_1h = _count_ollama_requests(1, state=ollama_state)
     ollama_reqs_24h, ollama_by_model_24h = _count_ollama_requests(
-        24, distribution_proxy=ollama_by_model_1h
+        24, distribution_proxy=ollama_by_model_1h, state=ollama_state
     )
     ollama_electricity = _estimate_ollama_electricity(
         ollama_state.get("models", []), ollama_reqs_24h
