@@ -270,7 +270,37 @@ def _count_ollama_requests(hours: int = 24) -> tuple[int, dict[str, int]]:
     if not loaded:
         return total, {}
 
-    # Distribute evenly, rounding up for the first N models so sum == total
+    # Use 1-hour distribution as proxy for 24-hour if available
+    # (avoids naive even-split when models have asymmetric usage)
+    if hours > 1:
+        _, by_model_1h = _count_ollama_requests(1)
+    else:
+        by_model_1h = {}
+    if by_model_1h and len(loaded) > 1:
+        # Scale 1h ratios to 24h total
+        total_1h = sum(by_model_1h.values())
+        if total_1h > 0:
+            result: dict[str, int] = {}
+            allocated = 0
+            for i, m in enumerate(loaded):
+                name = m["name"]
+                ratio = by_model_1h.get(name, 0) / total_1h
+                count = int(total * ratio)
+                result[name] = count
+                allocated += count
+            # Distribute remainder by 1h ratio priority
+            remainder = total - allocated
+            if remainder > 0:
+                sorted_models = sorted(
+                    loaded,
+                    key=lambda m: by_model_1h.get(m["name"], 0),
+                    reverse=True,
+                )
+                for i in range(remainder):
+                    result[sorted_models[i % len(sorted_models)]["name"]] += 1
+            return total, result
+
+    # Fallback: distribute evenly
     n = len(loaded)
     base = total // n
     remainder = total % n
@@ -398,10 +428,14 @@ def _forecast_context_limit(session: dict[str, Any]) -> str | None:
     if rate < 0.01:
         return None
 
+    # Suppress forecast for very high rates (>10/hour = marathon mode, no useful prediction)
+    if rate > 10:
+        return None
+
     minutes_to_next = 60 / rate
     if minutes_to_next < 10:
         return f"⚠️ {session['session_id'][:8]}: next context limit in ~{minutes_to_next:.0f} min ({limits} in {duration_hours:.1f}h)"
-    elif minutes_to_next < 60:
+    elif minutes_to_next < 30:
         return f"{session['session_id'][:8]}: next context limit in ~{minutes_to_next:.0f} min"
     return None
 
@@ -458,7 +492,7 @@ def _compare_sessions(current: list[dict[str, Any]], historical: list[dict[str, 
         delta = current_cost - avg_cost
         pct = float(delta / avg_cost * 100) if avg_cost else 0
 
-        if abs(pct) > 50:  # Only report significant deltas
+        if abs(pct) > 30:  # Report meaningful deltas (lowered from 50% to catch portfolio-scale drift)
             direction = "↑" if pct > 0 else "↓"
             messages.append(
                 f"{sess['session_id'][:8]}: {direction} {abs(pct):.0f}% vs avg ({current_cost:.2f} vs {avg_cost:.2f})"
@@ -617,9 +651,17 @@ def main() -> None:
             _write_marker(sess, args, alerts)
         alerts = []  # reset per-session
 
+    # ---- Ollama breach detection + marker ----
+    ollama_alerts: list[str] = []
     if ollama_reqs_24h > 2000:
         breach = True
-        alerts.append(f"ollama_reqs>2000({ollama_reqs_24h})")
+        ollama_alerts.append(f"ollama_reqs>2000({ollama_reqs_24h})")
+    if not args.dry_run:
+        _write_ollama_marker(
+            args, ollama_reqs_24h, ollama_by_model_24h,
+            ollama_reqs_1h, ollama_by_model_1h,
+            ollama_state, ollama_electricity, ollama_alerts,
+        )
 
     # ---- Output JSON ----
     result = {
@@ -644,6 +686,54 @@ def main() -> None:
     }
 
     print(json.dumps(result, indent=2))
+
+
+def _write_ollama_marker(
+    args: argparse.Namespace,
+    reqs_24h: int,
+    by_model_24h: dict[str, int],
+    reqs_1h: int,
+    by_model_1h: dict[str, int],
+    state: dict[str, Any],
+    electricity: Decimal,
+    alerts: list[str],
+) -> None:
+    """Write an Ollama-specific marker for local inference tracking."""
+    MARKER_DIR.mkdir(parents=True, exist_ok=True)
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # Use a fixed session ID so today's Ollama marker is overwritten each run
+    marker_path = MARKER_DIR / f"{date_str}_ollama.json"
+
+    marker = {
+        "session_id": "ollama",
+        "date": date_str,
+        "detected_at": datetime.now(timezone.utc).isoformat(),
+        "model": "ollama-aggregate",
+        "plan_type": args.plan_type,
+        "monthly_token_limit": args.monthly_token_limit,
+        "cost_usd": 0.0,  # flat plan assumption
+        "turns": reqs_24h,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "context_limits": 0,
+        "alerts": alerts,
+        "thresholds": {
+            "max_cost_usd": args.max_cost,
+            "max_turns": args.max_turns,
+            "max_context_limits": args.max_context_limits,
+        },
+        "ollama": {
+            "requests_24h": reqs_24h,
+            "by_model_24h": by_model_24h,
+            "requests_1h": reqs_1h,
+            "by_model_1h": by_model_1h,
+            "models_loaded": [m["name"] for m in state.get("models", [])],
+            "electricity_cost_usd": float(electricity),
+        },
+    }
+
+    # Overwrite each run (no idempotent skip for Ollama — counters change)
+    marker_path.write_text(json.dumps(marker, indent=2), encoding="utf-8")
 
 
 def _write_marker(sess: dict[str, Any], args: argparse.Namespace, alerts: list[str]) -> None:

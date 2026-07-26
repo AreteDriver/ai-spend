@@ -104,10 +104,22 @@ class TestForecastContextLimit:
         assert result is not None
         assert "~60 min" in result or "~" in result
 
-    def test_critical_fast_burn(self) -> None:
+    def test_marathon_mode_suppressed(self) -> None:
+        """Rate > 10/hour (marathon mode) — forecast is noise, suppress it."""
         now = datetime.now(timezone.utc)
         sess = {
             "context_limits": 10,
+            "first_ts": now - timedelta(minutes=30),
+            "last_ts": now,
+            "session_id": "abc12345-1234-1234-1234-123456789abc",
+        }
+        result = sga._forecast_context_limit(sess)
+        assert result is None
+
+    def test_critical_fast_burn(self) -> None:
+        now = datetime.now(timezone.utc)
+        sess = {
+            "context_limits": 4,
             "first_ts": now - timedelta(minutes=30),
             "last_ts": now,
             "session_id": "abc12345-1234-1234-1234-123456789abc",
@@ -299,6 +311,7 @@ class TestWriteMarker:
 class TestPlanTypeHandling:
     """Integration tests for plan-type behavior in main()."""
 
+    @patch.object(sga, "_write_ollama_marker")
     @patch.object(sga, "_write_marker")
     @patch.object(sga, "_poll_ollama")
     @patch.object(sga, "_count_ollama_requests")
@@ -309,6 +322,7 @@ class TestPlanTypeHandling:
         mock_ollama: MagicMock,
         mock_poll: MagicMock,
         mock_write: MagicMock,
+        mock_write_ollama: MagicMock,
     ) -> None:
         mock_scan.return_value = [
             {
@@ -348,6 +362,7 @@ class TestPlanTypeHandling:
                 assert result["total_cloud_cost"] == 0.0
                 assert result["usage_pct"] == 1.0  # 1500 / 150000 * 100 = 1.0
 
+    @patch.object(sga, "_write_ollama_marker")
     @patch.object(sga, "_write_marker")
     @patch.object(sga, "_poll_ollama")
     @patch.object(sga, "_count_ollama_requests")
@@ -358,6 +373,7 @@ class TestPlanTypeHandling:
         mock_ollama: MagicMock,
         mock_poll: MagicMock,
         mock_write: MagicMock,
+        mock_write_ollama: MagicMock,
     ) -> None:
         mock_scan.return_value = [
             {
@@ -396,9 +412,70 @@ class TestPlanTypeHandling:
                 assert result["total_cloud_cost"] == 100.0
 
 
+class TestWriteOllamaMarker:
+    """Unit tests for _write_ollama_marker."""
+
+    def test_writes_ollama_marker(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_markers = tmp_path / "marathons"
+        fake_markers.mkdir()
+        monkeypatch.setattr(sga, "MARKER_DIR", fake_markers)
+
+        args = MagicMock()
+        args.plan_type = "flat"
+        args.monthly_token_limit = 10_000_000_000
+        args.max_cost = 50
+        args.max_turns = 500
+        args.max_context_limits = 1
+
+        sga._write_ollama_marker(
+            args,
+            reqs_24h=1500,
+            by_model_24h={"llama3.1": 1000, "mistral": 500},
+            reqs_1h=80,
+            by_model_1h={"llama3.1": 60, "mistral": 20},
+            state={"models": [{"name": "llama3.1"}, {"name": "mistral"}]},
+            electricity=Decimal("1.23"),
+            alerts=["ollama_reqs>2000(1500)"],
+        )
+
+        marker_path = fake_markers / f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}_ollama.json"
+        assert marker_path.exists()
+        data = json.loads(marker_path.read_text())
+        assert data["session_id"] == "ollama"
+        assert data["model"] == "ollama-aggregate"
+        assert data["ollama"]["requests_24h"] == 1500
+        assert data["ollama"]["electricity_cost_usd"] == 1.23
+        assert data["ollama"]["models_loaded"] == ["llama3.1", "mistral"]
+
+    def test_ollama_marker_overwrites_each_run(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_markers = tmp_path / "marathons"
+        fake_markers.mkdir()
+        monkeypatch.setattr(sga, "MARKER_DIR", fake_markers)
+
+        args = MagicMock()
+        args.plan_type = "flat"
+        args.monthly_token_limit = 10_000_000_000
+        args.max_cost = 50
+        args.max_turns = 500
+        args.max_context_limits = 1
+
+        # First write
+        sga._write_ollama_marker(args, 100, {}, 5, {}, {"models": []}, Decimal("0.5"), [])
+        first_mtime = (fake_markers / f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}_ollama.json").stat().st_mtime
+
+        # Second write (counters changed, should overwrite)
+        sga._write_ollama_marker(args, 200, {}, 10, {}, {"models": []}, Decimal("0.6"), [])
+        second_mtime = (fake_markers / f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}_ollama.json").stat().st_mtime
+
+        assert second_mtime >= first_mtime
+        data = json.loads((fake_markers / f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}_ollama.json").read_text())
+        assert data["ollama"]["requests_24h"] == 200
+
+
 class TestDryRun:
     """Tests for --dry-run behavior."""
 
+    @patch.object(sga, "_write_ollama_marker")
     @patch.object(sga, "_write_marker")
     @patch.object(sga, "_poll_ollama")
     @patch.object(sga, "_count_ollama_requests")
@@ -409,6 +486,7 @@ class TestDryRun:
         mock_ollama: MagicMock,
         mock_poll: MagicMock,
         mock_write: MagicMock,
+        mock_write_ollama: MagicMock,
     ) -> None:
         mock_scan.return_value = [
             {
