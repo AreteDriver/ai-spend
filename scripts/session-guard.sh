@@ -185,7 +185,15 @@ _show_status() {
     # Quick scan preview
     echo ""
     echo "  Last scan preview:"
-    _scan_once >/dev/null 2>&1 || echo "    (scan failed — see journalctl --user -u session-guard)"
+    local scan_err
+    scan_err=$(mktemp)
+    if _scan_once >/dev/null 2>"$scan_err"; then
+        echo "    (scan succeeded — see above for details)"
+    else
+        echo "    (scan failed — last stderr lines:)"
+        tail -5 "$scan_err" | sed 's/^/      /'
+    fi
+    rm -f "$scan_err"
 }
 
 # --- Scan logic ---
@@ -258,7 +266,8 @@ else:
     else
         body="Metered: \$${cloud_cost_fmt} (${total_cloud_turns} turns, ${tokens_fmt} tokens)"
     fi
-    if (( $(echo "$ollama_electricity_cost > 0" | bc -l) )); then
+    # Use python3 for float comparison (bc not guaranteed on all platforms)
+    if python3 -c "import sys; sys.exit(0 if float('$ollama_electricity_cost') > 0 else 1)" 2>/dev/null; then
         body="${body} | Local: ~\$${elec_fmt} electricity (${ollama_reqs_24h} reqs)"
     fi
 
@@ -306,11 +315,19 @@ if [[ "$DAEMON" == true ]]; then
     echo "session-guard daemon started. PID $$"
     echo "  interval: ${INTERVAL}s"
     echo "  analyzer: $ANALYZER"
-    while true; do
+    # Graceful shutdown: finish current iteration before exiting
+    _running=true
+    _shutdown() {
+        echo "$(date -Iseconds) SIGTERM received, shutting down after current iteration..."
+        _running=false
+    }
+    trap _shutdown SIGTERM SIGINT
+    while [[ "$_running" == true ]]; do
         _cleanup_old_markers
         _scan_once || true
         sleep "$INTERVAL"
     done
+    echo "$(date -Iseconds) Daemon exiting cleanly"
 else
     _scan_once
 fi

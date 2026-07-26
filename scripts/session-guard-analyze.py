@@ -110,22 +110,6 @@ def _parse_args() -> argparse.Namespace:
 # Cloud (Claude Code transcript) analysis
 # ---------------------------------------------------------------------------
 
-def _detect_dominant_model(lines: list[str]) -> str:
-    models = []
-    for line in lines:
-        try:
-            entry = json.loads(line)
-            if entry.get("type") == "assistant":
-                model = entry.get("message", {}).get("model", "")
-                if model and model != "synthetic":
-                    models.append(model)
-        except json.JSONDecodeError:
-            pass
-    if not models:
-        return "unknown"
-    return Counter(models).most_common(1)[0][0]
-
-
 def _get_pricing(model: str) -> tuple[Decimal, Decimal]:
     pricing = _load_pricing()
     for prefix, rates in pricing.items():
@@ -135,10 +119,12 @@ def _get_pricing(model: str) -> tuple[Decimal, Decimal]:
 
 
 def _parse_transcript(file_path: Path) -> dict[str, Any]:
+    """Parse a transcript file in a single pass.
+
+    Extracts model, timestamps, usage, and cost without re-reading the file.
+    """
     raw_content = file_path.read_text(encoding="utf-8", errors="replace")
     lines = raw_content.splitlines()
-    model = _detect_dominant_model(lines)
-    input_rate, output_rate = _get_pricing(model)
 
     input_tokens = 0
     output_tokens = 0
@@ -146,6 +132,7 @@ def _parse_transcript(file_path: Path) -> dict[str, Any]:
     first_ts: datetime | None = None
     last_ts: datetime | None = None
     context_limits = raw_content.count("session is being continued")
+    models: list[str] = []
 
     for line in lines:
         line = line.strip()
@@ -169,15 +156,22 @@ def _parse_transcript(file_path: Path) -> dict[str, Any]:
 
         if entry.get("type") == "assistant":
             turn_count += 1
-            usage = entry.get("message", {}).get("usage", {})
+            msg = entry.get("message", {})
+            usage = msg.get("usage", {})
             input_tokens += usage.get("input_tokens", 0)
             output_tokens += usage.get("output_tokens", 0)
 
+            model = msg.get("model", "")
+            if model and model != "synthetic":
+                models.append(model)
+
+    dominant_model = Counter(models).most_common(1)[0][0] if models else "unknown"
+    input_rate, output_rate = _get_pricing(dominant_model)
     cost = Decimal(input_tokens) * input_rate + Decimal(output_tokens) * output_rate
 
     return {
         "session_id": file_path.stem,
-        "model": model,
+        "model": dominant_model,
         "cost": cost,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
@@ -195,15 +189,29 @@ def _scan_cloud_sessions(verbose: bool) -> list[dict[str, Any]]:
         return sessions
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-    for jsonl_path in TRANSCRIPT_BASE.rglob("*.jsonl"):
-        if "subagents" in jsonl_path.parts:
+    # Optimize: skip directories whose mtime is older than cutoff
+    # (avoids walking stale project trees on every hourly scan)
+    for project_dir in TRANSCRIPT_BASE.iterdir():
+        if not project_dir.is_dir():
             continue
-        mtime = datetime.fromtimestamp(jsonl_path.stat().st_mtime, tz=timezone.utc)
-        if mtime < cutoff:
+        try:
+            dir_mtime = datetime.fromtimestamp(project_dir.stat().st_mtime, tz=timezone.utc)
+        except OSError:
             continue
-        sess = _parse_transcript(jsonl_path)
-        sess["mtime"] = mtime
-        sessions.append(sess)
+        if dir_mtime < cutoff:
+            continue
+        for jsonl_path in project_dir.rglob("*.jsonl"):
+            if "subagents" in jsonl_path.parts:
+                continue
+            try:
+                mtime = datetime.fromtimestamp(jsonl_path.stat().st_mtime, tz=timezone.utc)
+            except OSError:
+                continue
+            if mtime < cutoff:
+                continue
+            sess = _parse_transcript(jsonl_path)
+            sess["mtime"] = mtime
+            sessions.append(sess)
 
     if verbose:
         for s in sessions:
@@ -224,6 +232,7 @@ def _poll_ollama() -> dict[str, Any]:
     result = {"models": [], "error": None}
     try:
         import urllib.request
+        import urllib.error
         with urllib.request.urlopen(
             "http://localhost:11434/api/ps", timeout=5
         ) as resp:
@@ -235,15 +244,25 @@ def _poll_ollama() -> dict[str, Any]:
                 }
                 for m in data.get("models", [])
             ]
-    except Exception as e:
-        result["error"] = str(e)
+    except (urllib.error.URLError, ConnectionRefusedError, TimeoutError) as e:
+        result["error"] = f"{type(e).__name__}: {e}"
+    except json.JSONDecodeError as e:
+        result["error"] = f"JSON decode: {e}"
     return result
 
 
-def _count_ollama_requests(hours: int = 24) -> tuple[int, dict[str, int]]:
+def _count_ollama_requests(
+    hours: int = 24,
+    distribution_proxy: dict[str, int] | None = None,
+) -> tuple[int, dict[str, int]]:
     """Count Ollama POST requests via journalctl with non-systemd fallbacks.
     Returns (total_requests, {model_name: count}) using loaded-model heuristic.
     Fallback chain: systemd journalctl → docker logs → /var/log/ollama.log
+
+    Args:
+        hours: Time window to query.
+        distribution_proxy: Optional 1-hour model distribution to use as ratio
+            proxy for the N-hour total. Prevents recursive journalctl calls.
     """
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
     lines: list[str] = []
@@ -281,7 +300,9 @@ def _count_ollama_requests(hours: int = 24) -> tuple[int, dict[str, int]]:
             pass
 
     # 3. Fallback: /var/log/ollama.log or ~/.local/share/ollama/logs/server.log
-    if not lines:
+    # Only use file-based fallback for 24h+ queries; 1h queries would require
+    # tail-like streaming to avoid loading multi-GB files into memory.
+    if not lines and hours >= 24:
         log_paths = [
             Path("/var/log/ollama.log"),
             Path.home() / ".local" / "share" / "ollama" / "logs" / "server.log",
@@ -311,14 +332,9 @@ def _count_ollama_requests(hours: int = 24) -> tuple[int, dict[str, int]]:
     if not loaded:
         return total, {}
 
-    # Use 1-hour distribution as proxy for 24-hour if available
-    # (avoids naive even-split when models have asymmetric usage)
-    if hours > 1:
-        _, by_model_1h = _count_ollama_requests(1)
-    else:
-        by_model_1h = {}
+    # Use provided distribution proxy (e.g. 1h ratios scaled to 24h total)
+    by_model_1h = distribution_proxy or {}
     if by_model_1h and len(loaded) > 1:
-        # Scale 1h ratios to 24h total
         total_1h = sum(by_model_1h.values())
         if total_1h > 0:
             result: dict[str, int] = {}
@@ -404,37 +420,35 @@ def _detect_gpu() -> tuple[str, int]:
 
 
 def _estimate_ollama_electricity(models: list[dict[str, Any]], reqs_24h: int) -> Decimal:
-    """Estimate electricity cost for Ollama usage."""
+    """Estimate electricity cost for Ollama usage.
+
+    Computes energy using Decimal arithmetic to avoid float-rounding artifacts
+    in cost calculations.
+    """
     if not models:
         return Decimal("0")
 
     _, gpu_tdp = _detect_gpu()
 
     # Heuristic: model size in GB affects power draw
-    # Rough: each loaded model draws proportional to its VRAM footprint
     total_vram = sum(m.get("size_vram", 0) for m in models)
     if total_vram == 0:
         return Decimal("0")
 
-    # Assume model stays loaded for ~avg session time.
-    # Simpler: estimate per-request energy.
-    # Average request takes ~3s (from logs), GPU at ~60% load during inference.
-    avg_request_seconds = 3.0
-    load_fraction = 0.6
-    hours_active = (reqs_24h * avg_request_seconds) / 3600
-
-    # Idle power: ~10% TDP when loaded but not processing
-    idle_fraction = 0.1
-    hours_idle = 24 - hours_active
+    # Average request takes ~3s, GPU at ~60% load during inference.
+    # Idle power: ~10% TDP when loaded but not processing.
+    # Compute entirely in Decimal to preserve precision.
+    hours_active = Decimal(str(reqs_24h)) * Decimal("3") / Decimal("3600")
+    hours_idle = Decimal("24") - hours_active
     if hours_idle < 0:
-        hours_idle = 0
+        hours_idle = Decimal("0")
 
     energy_kwh = (
-        (hours_active * gpu_tdp * load_fraction)
-        + (hours_idle * gpu_tdp * idle_fraction)
-    ) / 1000
+        (hours_active * Decimal(str(gpu_tdp)) * Decimal("0.6"))
+        + (hours_idle * Decimal(str(gpu_tdp)) * Decimal("0.1"))
+    ) / Decimal("1000")
 
-    cost = Decimal(str(energy_kwh)) * KWH_RATE
+    cost = energy_kwh * KWH_RATE
     return cost.quantize(Decimal("0.01"))
 
 
@@ -509,34 +523,50 @@ def _load_historical_markers(days: int = 7) -> list[dict[str, Any]]:
 
 
 def _compare_sessions(current: list[dict[str, Any]], historical: list[dict[str, Any]]) -> str | None:
-    """Compare today's sessions to historical average."""
+    """Compare today's sessions to historical average.
+
+    Uses cost for metered plans. Falls back to token counts when historical
+    markers all have cost_usd=0 (flat-plan subscription tracking).
+    """
     if not current or not historical:
         return None
 
-    # Group historical by model, compute average cost
+    # Determine comparison metric: cost (metered) or tokens (flat)
+    sample_costs = [Decimal(str(h.get("cost_usd", "0"))) for h in historical[:10]]
+    use_cost = any(c > 0 for c in sample_costs)
+
     by_model: dict[str, list[Decimal]] = defaultdict(list)
     for h in historical:
         model = h.get("model", "unknown")
-        cost = Decimal(str(h.get("cost_usd", "0")))
-        by_model[model].append(cost)
+        if use_cost:
+            val = Decimal(str(h.get("cost_usd", "0")))
+        else:
+            val = Decimal(str(h.get("input_tokens", 0) + h.get("output_tokens", 0)))
+        by_model[model].append(val)
 
     messages = []
     for sess in current:
         model = sess.get("model", "unknown")
         if model not in by_model or len(by_model[model]) < 1:
             continue
-        avg_cost = sum(by_model[model]) / len(by_model[model])
-        current_cost = sess.get("cost", Decimal("0"))
-        if avg_cost == 0:
+        avg_val = sum(by_model[model]) / len(by_model[model])
+        if use_cost:
+            current_val = sess.get("cost", Decimal("0"))
+            unit = "$"
+        else:
+            current_val = Decimal(str(sess.get("input_tokens", 0) + sess.get("output_tokens", 0)))
+            unit = "tok"
+
+        if avg_val == 0:
             continue
 
-        delta = current_cost - avg_cost
-        pct = float(delta / avg_cost * 100) if avg_cost else 0
+        delta = current_val - avg_val
+        pct = float(delta / avg_val * 100) if avg_val else 0
 
-        if abs(pct) > 30:  # Report meaningful deltas (lowered from 50% to catch portfolio-scale drift)
+        if abs(pct) > 30:
             direction = "↑" if pct > 0 else "↓"
             messages.append(
-                f"{sess['session_id'][:8]}: {direction} {abs(pct):.0f}% vs avg ({current_cost:.2f} vs {avg_cost:.2f})"
+                f"{sess['session_id'][:8]}: {direction} {abs(pct):.0f}% vs avg ({unit}{current_val:.0f} vs {unit}{avg_val:.0f})"
             )
 
     if messages:
@@ -549,37 +579,47 @@ def _compare_sessions(current: list[dict[str, Any]], historical: list[dict[str, 
 # ---------------------------------------------------------------------------
 
 def _detect_model_mix_shift(current: list[dict[str, Any]], historical: list[dict[str, Any]]) -> str | None:
-    """Detect if model usage has shifted compared to last 7 days."""
+    """Detect if model usage has shifted compared to last 7 days.
+
+    Uses cost for metered plans, token counts for flat plans.
+    """
     if not historical:
         return None
 
-    # Count tokens by model for historical period
-    hist_tokens: Counter[str] = Counter()
-    hist_costs: Counter[str] = Counter()
+    # Determine comparison metric
+    sample_costs = [float(h.get("cost_usd", 0)) for h in historical[:10]]
+    use_cost = any(c > 0 for c in sample_costs)
+
+    # Historical period
+    hist_counts: Counter[str] = Counter()
     for h in historical:
         model = h.get("model", "unknown")
-        # We don't have token counts in markers, use cost as proxy
-        cost = float(h.get("cost_usd", 0))
-        hist_costs[model] += cost
+        if use_cost:
+            hist_counts[model] += float(h.get("cost_usd", 0))
+        else:
+            hist_counts[model] += h.get("input_tokens", 0) + h.get("output_tokens", 0)
 
     # Current period
-    curr_costs: Counter[str] = Counter()
+    curr_counts: Counter[str] = Counter()
     for sess in current:
         model = sess.get("model", "unknown")
-        curr_costs[model] += float(sess.get("cost", 0))
+        if use_cost:
+            curr_counts[model] += float(sess.get("cost", 0))
+        else:
+            curr_counts[model] += sess.get("input_tokens", 0) + sess.get("output_tokens", 0)
 
-    if not curr_costs or not hist_costs:
+    if not curr_counts or not hist_counts:
         return None
 
-    total_hist = sum(hist_costs.values())
-    total_curr = sum(curr_costs.values())
+    total_hist = sum(hist_counts.values())
+    total_curr = sum(curr_counts.values())
     if total_hist == 0 or total_curr == 0:
         return None
 
     shifts = []
-    for model in set(list(hist_costs.keys()) + list(curr_costs.keys())):
-        hist_pct = hist_costs[model] / total_hist * 100
-        curr_pct = curr_costs[model] / total_curr * 100
+    for model in set(list(hist_counts.keys()) + list(curr_counts.keys())):
+        hist_pct = hist_counts[model] / total_hist * 100
+        curr_pct = curr_counts[model] / total_curr * 100
         delta = curr_pct - hist_pct
         if abs(delta) > 15:  # 15% shift threshold
             direction = "↑" if delta > 0 else "↓"
@@ -600,8 +640,8 @@ def _forecast_monthly_limit(
         return None
 
     elapsed = (datetime.now(timezone.utc) - first_ts).total_seconds()
-    if elapsed < 3600:  # Need at least 1h of data
-        return None
+    if elapsed < 21_600:  # Need at least 6 hours for a stable burn-rate estimate
+        return f"Monthly limit: ~? days (insufficient data — {elapsed/3600:.1f}h tracked)"
 
     rate_per_day = total_tokens / elapsed * 86400
     if rate_per_day <= 0:
@@ -632,8 +672,12 @@ def main() -> None:
 
     # ---- Ollama analysis ----
     ollama_state = _poll_ollama()
-    ollama_reqs_24h, ollama_by_model_24h = _count_ollama_requests(24)
+    # Query 1-hour distribution first, then pass it as proxy for 24-hour attribution
+    # (avoids 3 journalctl calls: 24h + recursive 1h + explicit 1h)
     ollama_reqs_1h, ollama_by_model_1h = _count_ollama_requests(1)
+    ollama_reqs_24h, ollama_by_model_24h = _count_ollama_requests(
+        24, distribution_proxy=ollama_by_model_1h
+    )
     ollama_electricity = _estimate_ollama_electricity(
         ollama_state.get("models", []), ollama_reqs_24h
     )
@@ -773,8 +817,10 @@ def _write_ollama_marker(
         },
     }
 
-    # Overwrite each run (no idempotent skip for Ollama — counters change)
-    marker_path.write_text(json.dumps(marker, indent=2), encoding="utf-8")
+    # Atomic write: write to temp file, then rename (avoids partial reads under concurrency)
+    tmp_path = marker_path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(marker, indent=2), encoding="utf-8")
+    os.replace(str(tmp_path), str(marker_path))
 
 
 def _write_marker(sess: dict[str, Any], args: argparse.Namespace, alerts: list[str]) -> None:
@@ -821,7 +867,10 @@ def _write_marker(sess: dict[str, Any], args: argparse.Namespace, alerts: list[s
         except (json.JSONDecodeError, OSError):
             pass
 
-    marker_path.write_text(json.dumps(marker, indent=2), encoding="utf-8")
+    # Atomic write to prevent partial reads under concurrency
+    tmp_path = marker_path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(marker, indent=2), encoding="utf-8")
+    os.replace(str(tmp_path), str(marker_path))
 
 
 if __name__ == "__main__":

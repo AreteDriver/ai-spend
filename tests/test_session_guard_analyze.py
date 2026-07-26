@@ -138,21 +138,22 @@ class TestForecastMonthlyLimit:
     def test_no_first_ts_returns_none(self) -> None:
         assert sga._forecast_monthly_limit(1000, 1_000_000, None) is None
 
-    def test_short_elapsed_returns_none(self) -> None:
+    def test_short_elapsed_returns_insufficient_data(self) -> None:
         now = datetime.now(timezone.utc)
-        assert sga._forecast_monthly_limit(1000, 1_000_000, now) is None
+        result = sga._forecast_monthly_limit(1000, 1_000_000, now)
+        assert "insufficient data" in result
 
     def test_days_remaining(self) -> None:
         now = datetime.now(timezone.utc)
-        first = now - timedelta(hours=2)
+        first = now - timedelta(hours=8)  # >6h threshold for stable estimate
         result = sga._forecast_monthly_limit(1_000_000, 10_000_000_000, first)
         assert result is not None
         assert "days remaining" in result
 
     def test_less_than_one_day_warning(self) -> None:
         now = datetime.now(timezone.utc)
-        first = now - timedelta(hours=1)
-        result = sga._forecast_monthly_limit(5_000_000_000, 10_000_000_000, first)
+        first = now - timedelta(hours=8)  # >6h threshold
+        result = sga._forecast_monthly_limit(9_500_000_000, 10_000_000_000, first)
         assert result is not None
         assert "<1 day" in result
 
