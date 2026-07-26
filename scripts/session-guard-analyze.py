@@ -680,7 +680,7 @@ def main() -> None:
 
     # ---- Cloud analysis ----
     cloud_sessions = _scan_cloud_sessions(args.verbose)
-    total_cloud_cost = sum(s.get("cost", Decimal("0")) for s in cloud_sessions)
+    total_cloud_cost = sum((s.get("cost", Decimal("0")) for s in cloud_sessions), Decimal("0"))
     total_cloud_turns = sum(s.get("turns", 0) for s in cloud_sessions)
     total_cloud_tokens = sum(s.get("input_tokens", 0) + s.get("output_tokens", 0) for s in cloud_sessions)
 
