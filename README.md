@@ -4,7 +4,7 @@
 [![CodeQL](https://github.com/AreteDriver/ai-spend/actions/workflows/codeql.yml/badge.svg)](https://github.com/AreteDriver/ai-spend/actions/workflows/codeql.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-spend.svg)](https://pypi.org/project/ai-spend/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![License: BSL-1.1](https://img.shields.io/badge/License-BSL--1.1-blue.svg)](https://mariadb.com/bsl11/)
+[![License: BUSL-1.1](https://img.shields.io/badge/License-BUSL--1.1-blue.svg)](https://mariadb.com/bsl11/)
 
 **`htop` for AI spend.** Local-first, cross-provider, terminal-native. No proxies. No dashboards. No SDK changes.
 
@@ -156,7 +156,7 @@ ai-spend sync --verbose
 
 ## License
 
-Licensed under BSL-1.1. See [LICENSE](LICENSE).
+Licensed under BUSL-1.1. See [LICENSE](LICENSE).
 
 ## Related Projects
 
@@ -170,7 +170,7 @@ Licensed under BSL-1.1. See [LICENSE](LICENSE).
 
 ## License
 
-Licensed under [BSL-1.1](https://mariadb.com/bsl11/) (Business Source License 1.1).
+Licensed under [BUSL-1.1](https://mariadb.com/bsl11/) (Business Source License 1.1).
 
 - **Free for non-production use** — personal projects, research, evaluation
 - **Production use requires a license** after the Change Date (4 years from release)
