@@ -28,6 +28,24 @@ $ ai-spend summary
   gpt-4.1               $18.22   (57% of OpenAI)
 ```
 
+## What this demonstrates
+
+- Turning provider billing APIs into a practical operational workflow.
+- Adapter design, local data handling, budget visibility, credential-aware configuration, and terminal UX.
+- Documentation and controls intended to help users understand spend without proxying their AI traffic.
+
+## Current status and limitations
+
+This is an active independent tool, not an enterprise billing system. Provider coverage and reported fields depend on the APIs each provider exposes; users should verify figures against provider invoices. Data remains local by default. See [Security](SECURITY.md) and [Changelog](CHANGELOG.md).
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest
+ruff check .
+```
+
 ## Why ai-spend?
 
 If you use **multiple AI providers** — Anthropic for coding, OpenAI for embeddings, maybe OpenRouter for routing or a local Ollama instance for cheap tasks — each has its own billing dashboard. None of them show the others.
